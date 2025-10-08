@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 /*
 Our goals: Create a monotone datastructure that can take un ordered transaction components can merge or joins them if they are non-conflicting.
@@ -42,16 +42,16 @@ impl_semi_lattice_field_value!(bitcoin::transaction::Version);
 
 macro_rules! impl_semi_lattice_for_hashset {
     ($type:ty) => {
-        impl Join for Option<HashSet<$type>> {
+        impl Join for HashSet<$type> {
             fn join(&self, other: &Self) -> Result<Self, JoinError> {
                 match (self, other) {
-                    (None, x) | (x, None) => Ok(x.clone()),
-                    (Some(a), Some(b)) => {
+                    (a, b) if a.is_empty() || b.is_empty() => Ok(a.clone()),
+                    (a, b) => {
                         let mut result = a.clone();
                         for item in b {
                             result.insert(item.clone());
                         }
-                        Ok(Some(result))
+                        Ok(result)
                     }
                     _ => Err(JoinError::StructuralMismatch),
                 }
@@ -83,8 +83,8 @@ pub enum Transaction {
 }
 
 pub struct UnOrderedTransaction {
-    inputs: Option<HashSet<Vin>>,
-    outputs: Option<HashSet<Vout>>,
+    inputs: HashSet<Vin>,
+    outputs: HashSet<Vout>,
     nlocktime: Option<bitcoin::locktime::absolute::LockTime>,
     nversion: Option<bitcoin::transaction::Version>,
 }
@@ -92,8 +92,8 @@ pub struct UnOrderedTransaction {
 impl Default for UnOrderedTransaction {
     fn default() -> Self {
         Self {
-            inputs: None,
-            outputs: None,
+            inputs: HashSet::new(),
+            outputs: HashSet::new(),
             nlocktime: None,
             nversion: None,
         }
@@ -103,20 +103,18 @@ impl Default for UnOrderedTransaction {
 impl UnOrderedTransaction {
     pub fn from_transaction(transaction: bitcoin::Transaction) -> Self {
         Self {
-            inputs: Some(
+            inputs: 
                 transaction
                     .input
                     .iter()
                     .map(|input| Vin::from_input(input))
                     .collect(),
-            ),
-            outputs: Some(
+            outputs: 
                 transaction
                     .output
                     .iter()
                     .map(|output| Vout::from_output(output))
                     .collect(),
-            ),
             nlocktime: Some(transaction.lock_time),
             nversion: Some(transaction.version),
         }
