@@ -79,7 +79,7 @@ trait Join {
 
 pub enum Transaction {
     UnOrderedTransaction(UnOrderedTransaction),
-    // OrderedTransaction(OrderedTransaction),
+    OrderedTransaction(OrderedTransaction),
 }
 
 pub struct UnOrderedTransaction {
@@ -119,6 +119,24 @@ impl UnOrderedTransaction {
             nversion: Some(transaction.version),
         }
     }
+
+    pub fn add_input(&mut self, input: Vin) {
+        self.inputs.insert(input);
+    }
+
+    pub fn add_output(&mut self, output: Vout) {
+        self.outputs.insert(output);
+    }
+
+    pub fn with_nlocktime(mut self, nlocktime: bitcoin::locktime::absolute::LockTime) -> Self {
+        self.nlocktime = Some(nlocktime);
+        self
+    }
+
+    pub fn with_nversion(mut self, nversion: bitcoin::transaction::Version) -> Self {
+        self.nversion = Some(nversion);
+        self
+    }
 }
 
 impl Join for UnOrderedTransaction {
@@ -132,7 +150,25 @@ impl Join for UnOrderedTransaction {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct OrderedTransaction {
+    inputs: BTreeSet<Vin>,
+    outputs: BTreeSet<Vout>,
+    nlocktime: Option<bitcoin::locktime::absolute::LockTime>,
+    nversion: Option<bitcoin::transaction::Version>,
+}
+
+impl From<UnOrderedTransaction> for OrderedTransaction {
+    fn from(unordered: UnOrderedTransaction) -> Self {
+        Self {
+            inputs: unordered.inputs.into_iter().collect(),
+            outputs: unordered.outputs.into_iter().collect(),
+            nlocktime: unordered.nlocktime,
+            nversion: unordered.nversion,
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct Vin {
     pub txid: Option<bitcoin::Txid>,
     pub vout: Option<u32>,
@@ -217,7 +253,7 @@ impl Join for Vin {
     }
 }
 
-#[derive(Clone, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Default, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct Vout {
     pub value: Option<bitcoin::Amount>,
     pub script_pubkey: Option<bitcoin::ScriptBuf>,
