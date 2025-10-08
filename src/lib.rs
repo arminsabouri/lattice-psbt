@@ -82,6 +82,7 @@ pub enum Transaction {
     OrderedTransaction(OrderedTransaction),
 }
 
+#[derive(Default)]
 pub struct UnOrderedTransaction {
     inputs: HashSet<Vin>,
     outputs: HashSet<Vout>,
@@ -89,32 +90,19 @@ pub struct UnOrderedTransaction {
     nversion: Option<bitcoin::transaction::Version>,
 }
 
-impl Default for UnOrderedTransaction {
-    fn default() -> Self {
-        Self {
-            inputs: HashSet::new(),
-            outputs: HashSet::new(),
-            nlocktime: None,
-            nversion: None,
-        }
-    }
-}
-
 impl UnOrderedTransaction {
     pub fn from_transaction(transaction: bitcoin::Transaction) -> Self {
         Self {
-            inputs: 
-                transaction
-                    .input
-                    .iter()
-                    .map(|input| Vin::from_input(input))
-                    .collect(),
-            outputs: 
-                transaction
-                    .output
-                    .iter()
-                    .map(|output| Vout::from_output(output))
-                    .collect(),
+            inputs: transaction
+                .input
+                .iter()
+                .map(|input| Vin::from_input(input))
+                .collect(),
+            outputs: transaction
+                .output
+                .iter()
+                .map(|output| Vout::from_output(output))
+                .collect(),
             nlocktime: Some(transaction.lock_time),
             nversion: Some(transaction.version),
         }
@@ -168,7 +156,7 @@ impl From<UnOrderedTransaction> for OrderedTransaction {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[derive(Default, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct Vin {
     pub txid: Option<bitcoin::Txid>,
     pub vout: Option<u32>,
@@ -176,19 +164,6 @@ pub struct Vin {
     pub witness: Option<bitcoin::Witness>,
     pub sequence: Option<bitcoin::Sequence>,
     pub prev_out: Option<bitcoin::TxOut>,
-}
-
-impl Default for Vin {
-    fn default() -> Self {
-        Vin {
-            txid: None,
-            vout: None,
-            script_sig: None,
-            witness: None,
-            sequence: None,
-            prev_out: None,
-        }
-    }
 }
 
 impl Vin {
@@ -227,12 +202,12 @@ impl Vin {
         self.vout = Some(vout);
         self
     }
-    
+
     pub fn with_txid(mut self, txid: bitcoin::Txid) -> Self {
         self.txid = Some(txid);
         self
     }
-    
+
     pub fn with_outpoint(mut self, outpoint: bitcoin::OutPoint) -> Self {
         self.txid = Some(outpoint.txid);
         self.vout = Some(outpoint.vout);
