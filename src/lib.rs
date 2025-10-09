@@ -17,7 +17,7 @@ Perhaps the best way to do this is to define a Optional field generic over a typ
 
 */
 
-macro_rules! impl_semi_lattice_field_value {
+macro_rules! impl_join_field_value {
     ($t:ty) => {
         impl Join for Option<$t> {
             fn join(&self, other: &Self) -> Result<Self, JoinError> {
@@ -31,17 +31,17 @@ macro_rules! impl_semi_lattice_field_value {
     };
 }
 
-impl_semi_lattice_field_value!(u32);
-impl_semi_lattice_field_value!(bitcoin::Txid);
-impl_semi_lattice_field_value!(bitcoin::ScriptBuf);
-impl_semi_lattice_field_value!(bitcoin::Witness);
-impl_semi_lattice_field_value!(bitcoin::TxOut);
-impl_semi_lattice_field_value!(bitcoin::Amount);
-impl_semi_lattice_field_value!(bitcoin::Sequence);
-impl_semi_lattice_field_value!(bitcoin::locktime::absolute::LockTime);
-impl_semi_lattice_field_value!(bitcoin::transaction::Version);
+impl_join_field_value!(u32);
+impl_join_field_value!(bitcoin::Txid);
+impl_join_field_value!(bitcoin::ScriptBuf);
+impl_join_field_value!(bitcoin::Witness);
+impl_join_field_value!(bitcoin::TxOut);
+impl_join_field_value!(bitcoin::Amount);
+impl_join_field_value!(bitcoin::Sequence);
+impl_join_field_value!(bitcoin::locktime::absolute::LockTime);
+impl_join_field_value!(bitcoin::transaction::Version);
 
-macro_rules! impl_semi_lattice_for_hashset {
+macro_rules! impl_join_for_hashset {
     ($type:ty) => {
         impl Join for HashSet<$type> {
             fn join(&self, other: &Self) -> Result<Self, JoinError> {
@@ -61,8 +61,8 @@ macro_rules! impl_semi_lattice_for_hashset {
     };
 }
 
-impl_semi_lattice_for_hashset!(Vin);
-impl_semi_lattice_for_hashset!(Vout);
+impl_join_for_hashset!(Vin);
+impl_join_for_hashset!(Vout);
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum JoinError {
