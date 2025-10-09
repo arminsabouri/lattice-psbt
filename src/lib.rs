@@ -284,8 +284,18 @@ impl Vout {
     pub fn from_output(output: &bitcoin::transaction::TxOut) -> Self {
         Self {
             value: Some(output.value),
-            script_pubkey: Some(output.script_pubkey.clone()),
+            script_pubkey: Some(output.script_pubkey),
         }
+    }
+
+    pub fn with_value(mut self, value: bitcoin::Amount) -> Self {
+        self.value = Some(value);
+        self
+    }
+
+    pub fn with_script_pubkey(mut self, script_pubkey: bitcoin::ScriptBuf) -> Self {
+        self.script_pubkey = Some(script_pubkey);
+        self
     }
 }
 
