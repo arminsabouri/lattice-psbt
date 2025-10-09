@@ -1,3 +1,4 @@
+use psbt_v2::v2::Psbt;
 use std::collections::{BTreeSet, HashSet};
 
 /*
@@ -153,6 +154,51 @@ impl From<UnOrderedTransaction> for OrderedTransaction {
             nlocktime: unordered.nlocktime,
             nversion: unordered.nversion,
         }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum PsbtConversionError {
+    #[error("Transaction is not valid")]
+    InvalidTransaction,
+}
+
+impl TryFrom<Psbt> for OrderedTransaction {
+    type Error = PsbtConversionError;
+    fn try_from(ordered: OrderedTransaction) -> Result<Psbt, Self::Error> {
+        let tx = psbt_v2::v2::Psbt {
+            global: psbt_v2::v2::Global {
+                tx_version: ordered.nlocktime.unwrap_or_default(),
+                fallback_lock_time: ordered.nlocktime,
+                ..Default::default()
+            },
+            inputs: ordered
+                .inputs
+                .into_iter()
+                .map(|input| psbt_v2::v2::Input {
+                    previous_txid: input.txid.ok_or(PsbtConversionError::InvalidTransaction)?,
+                    spent_output_index: input
+                        .vout
+                        .ok_or(PsbtConversionError::InvalidTransaction)?,
+                    sequence: input.sequence,
+                    witness_utxo: input.prev_out,
+                    final_script_sig: input.script_sig,
+                    final_script_witness: input.witness,
+                    ..Default::default()
+                })
+                .collect(),
+            outputs: ordered
+                .outputs
+                .into_iter()
+                .map(|output| psbt_v2::v2::Output {
+                    amount: output.value,
+                    script_pubkey: output.script_pubkey,
+                    ..Default::default()
+                })
+                .collect(),
+        };
+
+        Ok(tx)
     }
 }
 
