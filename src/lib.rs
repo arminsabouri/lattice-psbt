@@ -1,5 +1,5 @@
 use psbt_v2::v2::Psbt;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 /*
 Our goals: Create a monotone datastructure that can take un ordered transaction components can merge or joins them if they are non-conflicting.
@@ -14,7 +14,6 @@ The whole PSBT (a semi lattice also) is then the product of those components (al
 
 We need to define a each transaction component as either a scalar value that can be unknown or the scalar value itself. And Semi lattice for the sets of values that can accumulate facts monotonically.
 Perhaps the best way to do this is to define a Optional field generic over a type (which can be a scalar or a semilattice). And to define a trait for how to compare and join them.
-
 */
 
 macro_rules! impl_join_field_value {
@@ -54,7 +53,6 @@ macro_rules! impl_join_for_hashset {
                         }
                         Ok(result)
                     }
-                    _ => Err(JoinError::StructuralMismatch),
                 }
             }
         }
@@ -72,7 +70,7 @@ pub enum JoinError {
     StructuralMismatch,
 }
 
-trait Join {
+pub trait Join {
     fn join(&self, other: &Self) -> Result<Self, JoinError>
     where
         Self: Sized;
@@ -139,7 +137,10 @@ impl Join for UnOrderedTransaction {
     }
 }
 
+#[derive(Default)]
 pub struct OrderedTransaction {
+    // TODO: this should be vec and ordering should be defined on an index
+    // State machine should reflect ordered inputs, then ordered outputs.
     inputs: BTreeSet<Vin>,
     outputs: BTreeSet<Vout>,
     nlocktime: Option<bitcoin::locktime::absolute::LockTime>,
@@ -163,39 +164,68 @@ pub enum PsbtConversionError {
     InvalidTransaction,
 }
 
-impl TryFrom<Psbt> for OrderedTransaction {
+impl TryFrom<OrderedTransaction> for Psbt {
     type Error = PsbtConversionError;
-    fn try_from(ordered: OrderedTransaction) -> Result<Psbt, Self::Error> {
+    fn try_from(ordered: OrderedTransaction) -> Result<Self, Self::Error> {
         let tx = psbt_v2::v2::Psbt {
             global: psbt_v2::v2::Global {
-                tx_version: ordered.nlocktime.unwrap_or_default(),
+                tx_version: ordered
+                    .nversion
+                    .ok_or(PsbtConversionError::InvalidTransaction)?,
                 fallback_lock_time: ordered.nlocktime,
                 ..Default::default()
             },
             inputs: ordered
                 .inputs
                 .into_iter()
-                .map(|input| psbt_v2::v2::Input {
-                    previous_txid: input.txid.ok_or(PsbtConversionError::InvalidTransaction)?,
-                    spent_output_index: input
-                        .vout
-                        .ok_or(PsbtConversionError::InvalidTransaction)?,
-                    sequence: input.sequence,
-                    witness_utxo: input.prev_out,
-                    final_script_sig: input.script_sig,
-                    final_script_witness: input.witness,
-                    ..Default::default()
+                .map(|input| {
+                    Ok::<psbt_v2::v2::Input, PsbtConversionError>(psbt_v2::v2::Input {
+                        previous_txid: input.txid.ok_or(PsbtConversionError::InvalidTransaction)?,
+                        spent_output_index: input
+                            .vout
+                            .ok_or(PsbtConversionError::InvalidTransaction)?,
+                        sequence: input.sequence,
+                        witness_utxo: input.prev_out,
+                        final_script_sig: input.script_sig,
+                        final_script_witness: input.witness,
+                        min_time: None,
+                        min_height: None,
+                        non_witness_utxo: None,
+                        partial_sigs: BTreeMap::new(),
+                        sighash_type: None,
+                        redeem_script: None,
+                        witness_script: None,
+                        bip32_derivations: BTreeMap::new(),
+                        ripemd160_preimages: BTreeMap::new(),
+                        sha256_preimages: BTreeMap::new(),
+                        hash160_preimages: BTreeMap::new(),
+                        hash256_preimages: BTreeMap::new(),
+                        tap_key_sig: None,
+                        tap_script_sigs: BTreeMap::new(),
+                        tap_scripts: BTreeMap::new(),
+                        tap_key_origins: BTreeMap::new(),
+                        tap_internal_key: None,
+                        tap_merkle_root: None,
+                        proprietaries: BTreeMap::new(),
+                        unknowns: BTreeMap::new(),
+                    })
                 })
-                .collect(),
+                .collect::<Result<Vec<_>, PsbtConversionError>>()?,
             outputs: ordered
                 .outputs
                 .into_iter()
-                .map(|output| psbt_v2::v2::Output {
-                    amount: output.value,
-                    script_pubkey: output.script_pubkey,
-                    ..Default::default()
+                .map(|output| {
+                    Ok::<psbt_v2::v2::Output, PsbtConversionError>(psbt_v2::v2::Output {
+                        amount: output
+                            .value
+                            .ok_or(PsbtConversionError::InvalidTransaction)?,
+                        script_pubkey: output
+                            .script_pubkey
+                            .ok_or(PsbtConversionError::InvalidTransaction)?,
+                        ..Default::default()
+                    })
                 })
-                .collect(),
+                .collect::<Result<Vec<_>, PsbtConversionError>>()?,
         };
 
         Ok(tx)
@@ -284,7 +314,7 @@ impl Vout {
     pub fn from_output(output: &bitcoin::transaction::TxOut) -> Self {
         Self {
             value: Some(output.value),
-            script_pubkey: Some(output.script_pubkey),
+            script_pubkey: Some(output.script_pubkey.clone()),
         }
     }
 

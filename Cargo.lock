@@ -124,7 +124,7 @@ dependencies = [
 [[package]]
 name = "psbt-v2"
 version = "0.2.0"
-source = "git+https://github.com/tcharding/rust-psbt?branch=master#c32f7547d590c06d93305a51070220fc60142b56"
+source = "git+https://github.com/arminsabouri/rust-psbt?branch=update-consensus-decode-trait-bound#9647b0866b7822b0c8fa1b97915bcd2eeaa62f79"
 dependencies = [
  "bitcoin",
  "bitcoin-internals",
