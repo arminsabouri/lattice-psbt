@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 /*
 Our goals: Create a monotone datastructure that can take un ordered transaction components can merge or joins them if they are non-conflicting.
-Such a datastructure should have eventual consistency. We will model a PSBT as a join semi lattice set.
+Such a datastructure should have eventual consistency. We will model a PSBT as a meet-semilattice set.
 A lattice set in our context is a poset of partial transaction components, s.t any two postets can have a greatest lower bound.
 
 - Define what is a field lattice: a single truth aka scalar values (nlocktime, nversion, witness for an input, etc...)
@@ -21,6 +21,7 @@ macro_rules! impl_join_field_value {
         impl Join for Option<$t> {
             fn join(&self, other: &Self) -> Result<Self, JoinError> {
                 match (self, other) {
+                    (None, None) => Ok(None),
                     (None, x) | (x, None) => Ok(x.clone()),
                     (Some(a), Some(b)) if a == b => Ok(Some(a.clone())),
                     _ => Err(JoinError::ScalarDisagree),
@@ -81,7 +82,7 @@ pub enum Transaction {
     OrderedTransaction(OrderedTransaction),
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct UnOrderedTransaction {
     inputs: HashSet<Vin>,
     outputs: HashSet<Vout>,
@@ -137,7 +138,7 @@ impl Join for UnOrderedTransaction {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct OrderedTransaction {
     // TODO: this should be vec and ordering should be defined on an index
     // State machine should reflect ordered inputs, then ordered outputs.
@@ -232,7 +233,7 @@ impl TryFrom<OrderedTransaction> for Psbt {
     }
 }
 
-#[derive(Default, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[derive(Default, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Debug)]
 pub struct Vin {
     pub txid: Option<bitcoin::Txid>,
     pub vout: Option<u32>,
@@ -304,7 +305,7 @@ impl Join for Vin {
     }
 }
 
-#[derive(Clone, Default, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[derive(Clone, Default, PartialEq, Eq, Hash, Ord, PartialOrd, Debug)]
 pub struct Vout {
     pub value: Option<bitcoin::Amount>,
     pub script_pubkey: Option<bitcoin::ScriptBuf>,
@@ -335,5 +336,108 @@ impl Join for Vout {
             value: self.value.join(&other.value)?,
             script_pubkey: self.script_pubkey.join(&other.script_pubkey)?,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use proptest::prelude::*;
+
+    use super::*;
+
+    // impl Arbitrary for UnOrderedTransaction {
+    //     type Parameters = ();
+    //     type Strategy = proptest::strategy::BoxedStrategy<Self>;
+
+    //     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+    //         (
+    //             proptest::collection::hash_set(any::<Vin>(), 0..10),
+    //             proptest::collection::hash_set(any::<Vout>(), 0..10),
+    //             any::<Option<bitcoin::locktime::absolute::LockTime>>(),
+    //             any::<Option<bitcoin::transaction::Version>>(),
+    //         )
+    //             .prop_map(|(inputs, outputs, nlocktime, nversion)| Self {
+    //                 inputs,
+    //                 outputs,
+    //                 nlocktime,
+    //                 nversion,
+    //             })
+    //             .boxed()
+    //     }
+    // }
+
+    // impl Arbitrary for Vin {
+    //     type Parameters = ();
+    //     type Strategy = proptest::strategy::BoxedStrategy<Self>;
+
+    //     fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+    //         (
+    //             any::<Option<bitcoin::Txid>>(),
+    //             any::<Option<u32>>(),
+    //             any::<Option<bitcoin::ScriptBuf>>(),
+    //             any::<Option<bitcoin::Witness>>(),
+    //             any::<Option<bitcoin::Sequence>>(),
+    //             any::<Option<bitcoin::TxOut>>(),
+    //         )
+    //             .prop_map(|(txid, vout, script_sig, witness, sequence, prev_out)| Self {
+    //                 txid,
+    //                 vout,
+    //                 script_sig,
+    //                 witness,
+    //                 sequence,
+    //                 prev_out,
+    //             })
+    //             .boxed()
+    //     }
+    // }
+
+    impl Arbitrary for Vout {
+        type Parameters = ();
+        type Strategy = proptest::strategy::BoxedStrategy<Self>;
+
+        fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
+            (
+                any::<Option<u64>>().prop_map(|v| v.map(bitcoin::Amount::from_sat)),
+                any::<Option<Vec<u8>>>().prop_map(|v| v.map(bitcoin::ScriptBuf::from)),
+            )
+                .prop_map(|(value, script_pubkey)| Self {
+                    value,
+                    script_pubkey,
+                })
+                .boxed()
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn test_join_vout(a: Vout, b: Vout) {
+            let result = a.join(&b);
+            
+            // Test the join properties
+            match (&a.value, &b.value) {
+                (Some(x), Some(y)) if x != y => {
+                    assert!(result.is_err());
+                    assert_eq!(result.as_ref().unwrap_err(), &JoinError::ScalarDisagree);
+                }
+                _ => {
+                    println!("a: {:?}, b: {:?}", a, b);
+                    // Should succeed when values are same or one is None
+                    let joined = result.as_ref().unwrap();
+                    assert_eq!(joined.value, a.value.join(&b.value).unwrap());
+                }
+            }
+            
+            match (&a.script_pubkey, &b.script_pubkey) {
+                (Some(x), Some(y)) if x != y => {
+                    assert!(result.is_err());
+                    assert_eq!(result.unwrap_err(), JoinError::ScalarDisagree);
+                }
+                _ => {
+                    // Should succeed when scripts are same or one is None
+                    let joined = result.unwrap();
+                    assert_eq!(joined.script_pubkey, a.script_pubkey.join(&b.script_pubkey).unwrap());
+                }
+            }
+        }
     }
 }

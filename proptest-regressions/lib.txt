@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc eff8398f154615914b8a40ba6028830cc51379fd19f6967e0e75091e419e5549 # shrinks to a = Vout { value: None, script_pubkey: Some(Script()) }, b = Vout { value: None, script_pubkey: Some(Script(OP_0)) }
+cc d0967c09a2500de0cc2c6991150adb9754846364fd0754b2a731c167dee4f1e0 # shrinks to a = Vout { value: None, script_pubkey: Some(Script()) }, b = Vout { value: None, script_pubkey: Some(Script(OP_0)) }
