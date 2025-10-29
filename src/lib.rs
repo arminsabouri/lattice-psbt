@@ -1,4 +1,7 @@
-use psbt_v2::v2::Psbt;
+use bitcoin::{
+    ScriptBuf, TapLeafHash, XOnlyPublicKey, bip32::KeySource, secp256k1, taproot::TapTree,
+};
+use psbt_v2::{raw, v2::Psbt};
 use std::collections::{BTreeMap, HashSet};
 
 /*
@@ -40,7 +43,11 @@ impl_join_field_value!(bitcoin::Amount);
 impl_join_field_value!(bitcoin::Sequence);
 impl_join_field_value!(bitcoin::locktime::absolute::LockTime);
 impl_join_field_value!(bitcoin::transaction::Version);
+impl_join_field_value!(bitcoin::secp256k1::XOnlyPublicKey);
+impl_join_field_value!(bitcoin::taproot::TapTree);
 
+// TODO: just need one macro for map types
+// TODO: remove clones
 macro_rules! impl_join_for_hashset {
     ($type:ty) => {
         impl Join for HashSet<$type> {
@@ -55,6 +62,23 @@ macro_rules! impl_join_for_hashset {
 
 impl_join_for_hashset!(Vin);
 impl_join_for_hashset!(Vout);
+
+macro_rules! impl_join_for_btreemap {
+    ($key:ty, $value:ty) => {
+        impl Join for BTreeMap<$key, $value> {
+            fn join(&self, other: &Self) -> Result<Self, JoinError> {
+                let mut result = self.clone();
+                result.extend(other.clone().into_iter());
+                Ok(result)
+            }
+        }
+    };
+}
+
+impl_join_for_btreemap!(bitcoin::secp256k1::PublicKey, bitcoin::bip32::KeySource);
+impl_join_for_btreemap!(raw::ProprietaryKey, Vec<u8>);
+impl_join_for_btreemap!(raw::Key, Vec<u8>);
+impl_join_for_btreemap!(XOnlyPublicKey, (Vec<TapLeafHash>, KeySource));
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum JoinError {
@@ -217,7 +241,14 @@ impl TryFrom<OrderedTransaction> for Psbt {
                         script_pubkey: output
                             .script_pubkey
                             .ok_or(PsbtConversionError::InvalidTransaction)?,
-                        ..Default::default()
+                        redeem_script: output.redeem_script,
+                        witness_script: output.witness_script,
+                        bip32_derivations: output.bip32_derivations,
+                        tap_internal_key: output.tap_internal_key,
+                        tap_tree: output.tap_tree,
+                        tap_key_origins: output.tap_key_origins,
+                        proprietaries: output.proprietaries,
+                        unknowns: output.unknowns,
                     })
                 })
                 .collect::<Result<Vec<_>, PsbtConversionError>>()?,
@@ -235,6 +266,7 @@ pub struct Vin {
     pub witness: Option<bitcoin::Witness>,
     pub sequence: Option<bitcoin::Sequence>,
     pub prev_out: Option<bitcoin::TxOut>,
+    // TODO: extend to include all psbt inputs fields
 }
 
 impl Vin {
@@ -303,6 +335,22 @@ impl Join for Vin {
 pub struct Vout {
     pub value: Option<bitcoin::Amount>,
     pub script_pubkey: Option<bitcoin::ScriptBuf>,
+    /// The redeem script for this output.
+    pub redeem_script: Option<ScriptBuf>,
+    /// The witness script for this output.
+    pub witness_script: Option<ScriptBuf>,
+    /// A map from public keys needed to spend this output to their
+    /// corresponding master key fingerprints and derivation paths.
+    pub bip32_derivations: BTreeMap<secp256k1::PublicKey, KeySource>,
+    /// The internal pubkey.
+    pub tap_internal_key: Option<XOnlyPublicKey>,
+    /// Taproot Output tree.
+    pub tap_tree: Option<TapTree>,
+    pub tap_key_origins: BTreeMap<XOnlyPublicKey, (Vec<TapLeafHash>, KeySource)>,
+    /// Proprietary key-value pairs for this output.
+    pub proprietaries: BTreeMap<raw::ProprietaryKey, Vec<u8>>,
+    /// Unknown key-value pairs for this output.
+    pub unknowns: BTreeMap<raw::Key, Vec<u8>>,
 }
 
 impl Vout {
@@ -310,6 +358,7 @@ impl Vout {
         Self {
             value: Some(output.value),
             script_pubkey: Some(output.script_pubkey.clone()),
+            ..Default::default()
         }
     }
 
@@ -329,6 +378,60 @@ impl Join for Vout {
         Ok(Self {
             value: self.value.join(&other.value)?,
             script_pubkey: self.script_pubkey.join(&other.script_pubkey)?,
+            redeem_script: self.redeem_script.join(&other.redeem_script)?,
+            witness_script: self.witness_script.join(&other.witness_script)?,
+            tap_internal_key: self.tap_internal_key.join(&other.tap_internal_key)?,
+            tap_tree: self.tap_tree.join(&other.tap_tree)?,
+            bip32_derivations: self.bip32_derivations.join(&other.bip32_derivations)?,
+            tap_key_origins: self.tap_key_origins.join(&other.tap_key_origins)?,
+            proprietaries: self.proprietaries.join(&other.proprietaries)?,
+            unknowns: self.unknowns.join(&other.unknowns)?,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_join_outputs() {
+        let output_amount = bitcoin::Amount::from_sat(1000);
+        let output_script_pubkey = bitcoin::ScriptBuf::new();
+
+        let p1 = Vout {
+            value: Some(output_amount),
+            ..Default::default()
+        };
+        let p1_again = Vout {
+            value: Some(output_amount),
+            ..Default::default()
+        };
+        // Attempting to join p1 and p1_again NOT fail and result in a Vout with value 1000
+        let p1_joined = p1.join(&p1_again).unwrap();
+        assert_eq!(p1_joined.value, Some(output_amount));
+
+        let p1_with_different_value = Vout {
+            value: Some(bitcoin::Amount::from_sat(2000)),
+            ..Default::default()
+        };
+        let p1_joined_with_different_value = p1.join(&p1_with_different_value).err();
+        assert_eq!(
+            p1_joined_with_different_value,
+            Some(JoinError::ScalarDisagree)
+        );
+
+        let p1_with_different_script_pubkey = Vout {
+            script_pubkey: Some(bitcoin::ScriptBuf::new()),
+            ..Default::default()
+        };
+
+        let p1_joined_with_different_script_pubkey =
+            p1.join(&p1_with_different_script_pubkey).unwrap();
+        assert_eq!(
+            p1_joined_with_different_script_pubkey.script_pubkey,
+            Some(output_script_pubkey)
+        );
+        assert_eq!(p1_joined.value, Some(output_amount));
     }
 }
