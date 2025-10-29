@@ -45,16 +45,9 @@ macro_rules! impl_join_for_hashset {
     ($type:ty) => {
         impl Join for HashSet<$type> {
             fn join(&self, other: &Self) -> Result<Self, JoinError> {
-                match (self, other) {
-                    (a, b) if a.is_empty() || b.is_empty() => Ok(a.clone()),
-                    (a, b) => {
-                        let mut result = a.clone();
-                        for item in b {
-                            result.insert(item.clone());
-                        }
-                        Ok(result)
-                    }
-                }
+                let mut result = self.clone();
+                result.extend(other.iter().cloned());
+                Ok(result)
             }
         }
     };
