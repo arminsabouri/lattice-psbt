@@ -21,6 +21,7 @@ macro_rules! impl_join_field_value {
         impl Join for Option<$t> {
             fn join(&self, other: &Self) -> Result<Self, JoinError> {
                 match (self, other) {
+                    (None, None) => Ok(None),
                     (None, x) | (x, None) => Ok(x.clone()),
                     (Some(a), Some(b)) if a == b => Ok(Some(a.clone())),
                     _ => Err(JoinError::ScalarDisagree),
