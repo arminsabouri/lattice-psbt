@@ -73,6 +73,7 @@ pub trait Join {
 pub enum Transaction {
     UnOrderedTransaction(UnOrderedTransaction),
     OrderedTransaction(OrderedTransaction),
+    // TODO: add a global transaction state
 }
 
 #[derive(Default)]
@@ -226,7 +227,7 @@ impl TryFrom<OrderedTransaction> for Psbt {
     }
 }
 
-#[derive(Default, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[derive(Default, Clone, PartialEq, Eq, Hash)]
 pub struct Vin {
     pub txid: Option<bitcoin::Txid>,
     pub vout: Option<u32>,
@@ -298,7 +299,7 @@ impl Join for Vin {
     }
 }
 
-#[derive(Clone, Default, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[derive(Clone, Default, PartialEq, Eq, Hash)]
 pub struct Vout {
     pub value: Option<bitcoin::Amount>,
     pub script_pubkey: Option<bitcoin::ScriptBuf>,
