@@ -1,5 +1,5 @@
 use psbt_v2::v2::Psbt;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, HashSet};
 
 /*
 Our goals: Create a monotone datastructure that can take un ordered transaction components can merge or joins them if they are non-conflicting.
@@ -135,8 +135,8 @@ impl Join for UnOrderedTransaction {
 pub struct OrderedTransaction {
     // TODO: this should be vec and ordering should be defined on an index
     // State machine should reflect ordered inputs, then ordered outputs.
-    inputs: BTreeSet<Vin>,
-    outputs: BTreeSet<Vout>,
+    inputs: Vec<Vin>,
+    outputs: Vec<Vout>,
     nlocktime: Option<bitcoin::locktime::absolute::LockTime>,
     nversion: Option<bitcoin::transaction::Version>,
 }
