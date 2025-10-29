@@ -45,6 +45,7 @@ impl_join_field_value!(bitcoin::locktime::absolute::LockTime);
 impl_join_field_value!(bitcoin::transaction::Version);
 impl_join_field_value!(bitcoin::secp256k1::XOnlyPublicKey);
 impl_join_field_value!(bitcoin::taproot::TapTree);
+impl_join_field_value!(psbt_v2::Version);
 
 // TODO: just need one macro for map types
 // TODO: remove clones
@@ -79,6 +80,7 @@ impl_join_for_btreemap!(bitcoin::secp256k1::PublicKey, bitcoin::bip32::KeySource
 impl_join_for_btreemap!(raw::ProprietaryKey, Vec<u8>);
 impl_join_for_btreemap!(raw::Key, Vec<u8>);
 impl_join_for_btreemap!(XOnlyPublicKey, (Vec<TapLeafHash>, KeySource));
+impl_join_for_btreemap!(bitcoin::bip32::Xpub, KeySource);
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum JoinError {
@@ -94,6 +96,27 @@ pub trait Join {
         Self: Sized;
 }
 
+#[derive(Default)]
+pub struct Global {
+    pub tx_version: Option<bitcoin::transaction::Version>,
+    pub fallback_lock_time: Option<bitcoin::locktime::absolute::LockTime>,
+    pub xpubs: BTreeMap<bitcoin::bip32::Xpub, KeySource>,
+    pub proprietaries: BTreeMap<raw::ProprietaryKey, Vec<u8>>,
+    pub unknowns: BTreeMap<raw::Key, Vec<u8>>,
+}
+
+impl Join for Global {
+    fn join(&self, other: &Self) -> Result<Self, JoinError> {
+        Ok(Self {
+            tx_version: self.tx_version.join(&other.tx_version)?,
+            fallback_lock_time: self.fallback_lock_time.join(&other.fallback_lock_time)?,
+            xpubs: self.xpubs.join(&other.xpubs)?,
+            proprietaries: self.proprietaries.join(&other.proprietaries)?,
+            unknowns: self.unknowns.join(&other.unknowns)?,
+        })
+    }
+}
+
 pub enum Transaction {
     UnOrderedTransaction(UnOrderedTransaction),
     OrderedTransaction(OrderedTransaction),
@@ -104,8 +127,7 @@ pub enum Transaction {
 pub struct UnOrderedTransaction {
     inputs: HashSet<Vin>,
     outputs: HashSet<Vout>,
-    nlocktime: Option<bitcoin::locktime::absolute::LockTime>,
-    nversion: Option<bitcoin::transaction::Version>,
+    global: Global,
 }
 
 impl UnOrderedTransaction {
@@ -121,8 +143,7 @@ impl UnOrderedTransaction {
                 .iter()
                 .map(|output| Vout::from_output(output))
                 .collect(),
-            nlocktime: Some(transaction.lock_time),
-            nversion: Some(transaction.version),
+            global: Global::default(),
         }
     }
 
@@ -135,12 +156,12 @@ impl UnOrderedTransaction {
     }
 
     pub fn with_nlocktime(mut self, nlocktime: bitcoin::locktime::absolute::LockTime) -> Self {
-        self.nlocktime = Some(nlocktime);
+        self.global.fallback_lock_time = Some(nlocktime);
         self
     }
 
     pub fn with_nversion(mut self, nversion: bitcoin::transaction::Version) -> Self {
-        self.nversion = Some(nversion);
+        self.global.tx_version = Some(nversion);
         self
     }
 }
@@ -150,8 +171,7 @@ impl Join for UnOrderedTransaction {
         Ok(Self {
             inputs: self.inputs.join(&other.inputs)?,
             outputs: self.outputs.join(&other.outputs)?,
-            nlocktime: self.nlocktime.join(&other.nlocktime)?,
-            nversion: self.nversion.join(&other.nversion)?,
+            global: self.global.join(&other.global)?,
         })
     }
 }
@@ -162,8 +182,7 @@ pub struct OrderedTransaction {
     // State machine should reflect ordered inputs, then ordered outputs.
     inputs: Vec<Vin>,
     outputs: Vec<Vout>,
-    nlocktime: Option<bitcoin::locktime::absolute::LockTime>,
-    nversion: Option<bitcoin::transaction::Version>,
+    global: Global,
 }
 
 impl From<UnOrderedTransaction> for OrderedTransaction {
@@ -171,8 +190,7 @@ impl From<UnOrderedTransaction> for OrderedTransaction {
         Self {
             inputs: unordered.inputs.into_iter().collect(),
             outputs: unordered.outputs.into_iter().collect(),
-            nlocktime: unordered.nlocktime,
-            nversion: unordered.nversion,
+            global: unordered.global,
         }
     }
 }
@@ -188,11 +206,18 @@ impl TryFrom<OrderedTransaction> for Psbt {
     fn try_from(ordered: OrderedTransaction) -> Result<Self, Self::Error> {
         let tx = psbt_v2::v2::Psbt {
             global: psbt_v2::v2::Global {
+                version: psbt_v2::Version::TWO,
                 tx_version: ordered
-                    .nversion
+                    .global
+                    .tx_version
                     .ok_or(PsbtConversionError::InvalidTransaction)?,
-                fallback_lock_time: ordered.nlocktime,
-                ..Default::default()
+                fallback_lock_time: ordered.global.fallback_lock_time,
+                tx_modifiable_flags: 0,
+                input_count: ordered.inputs.len(),
+                output_count: ordered.outputs.len(),
+                xpubs: ordered.global.xpubs,
+                proprietaries: ordered.global.proprietaries,
+                unknowns: ordered.global.unknowns,
             },
             inputs: ordered
                 .inputs
