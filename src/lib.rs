@@ -56,6 +56,12 @@ impl_join_field_value!(bitcoin::transaction::Version);
 impl_join_field_value!(bitcoin::secp256k1::XOnlyPublicKey);
 impl_join_field_value!(bitcoin::taproot::TapTree);
 impl_join_field_value!(psbt_v2::Version);
+impl_join_field_value!(bitcoin::absolute::Time);
+impl_join_field_value!(bitcoin::absolute::Height);
+impl_join_field_value!(bitcoin::Transaction);
+impl_join_field_value!(psbt_v2::PsbtSighashType);
+impl_join_field_value!(bitcoin::taproot::Signature);
+impl_join_field_value!(bitcoin::TapNodeHash);
 
 // TODO: if there is a key collision and the values are not equal, we should return an error
 // TODO: just need one macro for map types
@@ -92,6 +98,20 @@ impl_join_for_btreemap!(raw::ProprietaryKey, Vec<u8>);
 impl_join_for_btreemap!(raw::Key, Vec<u8>);
 impl_join_for_btreemap!(XOnlyPublicKey, (Vec<TapLeafHash>, KeySource));
 impl_join_for_btreemap!(bitcoin::bip32::Xpub, KeySource);
+
+impl_join_for_btreemap!(bitcoin::PublicKey, bitcoin::ecdsa::Signature);
+impl_join_for_btreemap!(bitcoin::hashes::sha256::Hash, Vec<u8>);
+impl_join_for_btreemap!(bitcoin::hashes::ripemd160::Hash, Vec<u8>);
+impl_join_for_btreemap!(bitcoin::hashes::hash160::Hash, Vec<u8>);
+impl_join_for_btreemap!(bitcoin::hashes::sha256d::Hash, Vec<u8>);
+impl_join_for_btreemap!(
+    (bitcoin::XOnlyPublicKey, bitcoin::TapLeafHash),
+    bitcoin::taproot::Signature
+);
+impl_join_for_btreemap!(
+    bitcoin::taproot::ControlBlock,
+    (bitcoin::ScriptBuf, bitcoin::taproot::LeafVersion)
+);
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum JoinError {
@@ -151,7 +171,7 @@ impl Join for UnOrderedInputs {
 impl Transaction<UnOrderedInputs> {
     pub fn apply_bip69_ordering(self) -> Transaction<OrderedInputs> {
         let mut inputs = self.state.inputs.into_iter().collect::<Vec<_>>();
-        inputs.sort_by_key(|input| (input.txid, input.vout));
+        inputs.sort_by_key(|input| (input.previous_output, input.spent_output_index));
         Transaction {
             state: OrderedInputs {
                 inputs,
@@ -302,15 +322,15 @@ impl TryFrom<Transaction<WithGlobal>> for Psbt {
                 .map(|(i, input)| {
                     Ok::<psbt_v2::v2::Input, PsbtConversionError>(psbt_v2::v2::Input {
                         previous_txid: input
-                            .txid
+                            .previous_output
                             .ok_or(PsbtConversionError::MissingOutpointTxid(i))?,
                         spent_output_index: input
-                            .vout
+                            .spent_output_index
                             .ok_or(PsbtConversionError::MissingOutpointVout(i))?,
                         sequence: input.sequence,
-                        witness_utxo: input.prev_out,
-                        final_script_sig: input.script_sig,
-                        final_script_witness: input.witness,
+                        witness_utxo: input.witness_utxo,
+                        final_script_sig: input.final_script_sig,
+                        final_script_witness: input.final_script_witness,
                         min_time: None,
                         min_height: None,
                         non_witness_utxo: None,
@@ -390,8 +410,14 @@ mod tests {
         assert_eq!(psbt.global.tx_modifiable_flags, 0);
         assert_eq!(psbt.global.version, psbt_v2::Version::TWO);
 
-        assert_eq!(psbt.inputs[0].previous_txid, my_vin.txid.unwrap());
-        assert_eq!(psbt.inputs[0].spent_output_index, my_vin.vout.unwrap());
+        assert_eq!(
+            psbt.inputs[0].previous_txid,
+            my_vin.previous_output.unwrap()
+        );
+        assert_eq!(
+            psbt.inputs[0].spent_output_index,
+            my_vin.spent_output_index.unwrap()
+        );
         // TODO: more input assertions
         assert_eq!(psbt.outputs[0].amount, my_vout.value.unwrap());
         assert_eq!(
