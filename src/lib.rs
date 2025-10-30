@@ -5,6 +5,14 @@ use psbt_v2::{raw, v2::Psbt};
 use rand::{SeedableRng, seq::SliceRandom};
 use std::collections::{BTreeMap, HashSet};
 
+pub mod global;
+pub mod input;
+pub mod output;
+
+use global::Global;
+use input::Vin;
+use output::Vout;
+
 /*
 Our goals: Create a monotone datastructure that can take un ordered transaction components can merge or joins them if they are non-conflicting.
 Such a datastructure should have eventual consistency. We will model a PSBT as a join semi lattice set.
@@ -92,31 +100,11 @@ pub enum JoinError {
     StructuralMismatch,
 }
 
+/// Trait for PSBT fragments that can be joined.
 pub trait Join {
     fn join(&self, other: &Self) -> Result<Self, JoinError>
     where
         Self: Sized;
-}
-
-#[derive(Default, Debug)]
-pub struct Global {
-    pub tx_version: Option<bitcoin::transaction::Version>,
-    pub fallback_lock_time: Option<bitcoin::locktime::absolute::LockTime>,
-    pub xpubs: BTreeMap<bitcoin::bip32::Xpub, KeySource>,
-    pub proprietaries: BTreeMap<raw::ProprietaryKey, Vec<u8>>,
-    pub unknowns: BTreeMap<raw::Key, Vec<u8>>,
-}
-
-impl Join for Global {
-    fn join(&self, other: &Self) -> Result<Self, JoinError> {
-        Ok(Self {
-            tx_version: self.tx_version.join(&other.tx_version)?,
-            fallback_lock_time: self.fallback_lock_time.join(&other.fallback_lock_time)?,
-            xpubs: self.xpubs.join(&other.xpubs)?,
-            proprietaries: self.proprietaries.join(&other.proprietaries)?,
-            unknowns: self.unknowns.join(&other.unknowns)?,
-        })
-    }
 }
 
 // Perhaps we need more granular transaction states here:
@@ -349,138 +337,6 @@ impl TryFrom<WithGlobal> for Psbt {
         };
 
         Ok(tx)
-    }
-}
-
-#[derive(Default, Clone, PartialEq, Eq, Hash, Debug)]
-pub struct Vin {
-    pub txid: Option<bitcoin::Txid>,
-    pub vout: Option<u32>,
-    pub script_sig: Option<bitcoin::ScriptBuf>,
-    pub witness: Option<bitcoin::Witness>,
-    pub sequence: Option<bitcoin::Sequence>,
-    pub prev_out: Option<bitcoin::TxOut>,
-    // TODO: extend to include all psbt inputs fields
-}
-
-impl Vin {
-    pub fn from_input(input: &bitcoin::transaction::TxIn) -> Self {
-        Self {
-            txid: Some(input.previous_output.txid),
-            vout: Some(input.previous_output.vout),
-            script_sig: Some(input.script_sig.clone()),
-            witness: Some(input.witness.clone()),
-            sequence: Some(input.sequence),
-            ..Default::default()
-        }
-    }
-
-    pub fn with_prev_out(mut self, prev_out: bitcoin::TxOut) -> Self {
-        self.prev_out = Some(prev_out);
-        self
-    }
-
-    pub fn with_witness(mut self, witness: bitcoin::Witness) -> Self {
-        self.witness = Some(witness);
-        self
-    }
-
-    pub fn with_script_sig(mut self, script_sig: bitcoin::ScriptBuf) -> Self {
-        self.script_sig = Some(script_sig);
-        self
-    }
-
-    pub fn with_sequence(mut self, sequence: bitcoin::Sequence) -> Self {
-        self.sequence = Some(sequence);
-        self
-    }
-
-    pub fn with_vout(mut self, vout: u32) -> Self {
-        self.vout = Some(vout);
-        self
-    }
-
-    pub fn with_txid(mut self, txid: bitcoin::Txid) -> Self {
-        self.txid = Some(txid);
-        self
-    }
-
-    pub fn with_outpoint(mut self, outpoint: bitcoin::OutPoint) -> Self {
-        self.txid = Some(outpoint.txid);
-        self.vout = Some(outpoint.vout);
-        self
-    }
-}
-
-impl Join for Vin {
-    fn join(&self, other: &Self) -> Result<Self, JoinError> {
-        Ok(Self {
-            txid: self.txid.join(&other.txid)?,
-            vout: self.vout.join(&other.vout)?,
-            script_sig: self.script_sig.join(&other.script_sig)?,
-            witness: self.witness.join(&other.witness)?,
-            sequence: self.sequence.join(&other.sequence)?,
-            prev_out: self.prev_out.join(&other.prev_out)?,
-        })
-    }
-}
-
-#[derive(Clone, Default, PartialEq, Eq, Hash, Debug)]
-pub struct Vout {
-    pub value: Option<bitcoin::Amount>,
-    pub script_pubkey: Option<bitcoin::ScriptBuf>,
-    /// The redeem script for this output.
-    pub redeem_script: Option<ScriptBuf>,
-    /// The witness script for this output.
-    pub witness_script: Option<ScriptBuf>,
-    /// A map from public keys needed to spend this output to their
-    /// corresponding master key fingerprints and derivation paths.
-    pub bip32_derivations: BTreeMap<secp256k1::PublicKey, KeySource>,
-    /// The internal pubkey.
-    pub tap_internal_key: Option<XOnlyPublicKey>,
-    /// Taproot Output tree.
-    pub tap_tree: Option<TapTree>,
-    pub tap_key_origins: BTreeMap<XOnlyPublicKey, (Vec<TapLeafHash>, KeySource)>,
-    /// Proprietary key-value pairs for this output.
-    pub proprietaries: BTreeMap<raw::ProprietaryKey, Vec<u8>>,
-    /// Unknown key-value pairs for this output.
-    pub unknowns: BTreeMap<raw::Key, Vec<u8>>,
-}
-
-impl Vout {
-    pub fn from_output(output: &bitcoin::transaction::TxOut) -> Self {
-        Self {
-            value: Some(output.value),
-            script_pubkey: Some(output.script_pubkey.clone()),
-            ..Default::default()
-        }
-    }
-
-    pub fn with_value(mut self, value: bitcoin::Amount) -> Self {
-        self.value = Some(value);
-        self
-    }
-
-    pub fn with_script_pubkey(mut self, script_pubkey: bitcoin::ScriptBuf) -> Self {
-        self.script_pubkey = Some(script_pubkey);
-        self
-    }
-}
-
-impl Join for Vout {
-    fn join(&self, other: &Self) -> Result<Self, JoinError> {
-        Ok(Self {
-            value: self.value.join(&other.value)?,
-            script_pubkey: self.script_pubkey.join(&other.script_pubkey)?,
-            redeem_script: self.redeem_script.join(&other.redeem_script)?,
-            witness_script: self.witness_script.join(&other.witness_script)?,
-            tap_internal_key: self.tap_internal_key.join(&other.tap_internal_key)?,
-            tap_tree: self.tap_tree.join(&other.tap_tree)?,
-            bip32_derivations: self.bip32_derivations.join(&other.bip32_derivations)?,
-            tap_key_origins: self.tap_key_origins.join(&other.tap_key_origins)?,
-            proprietaries: self.proprietaries.join(&other.proprietaries)?,
-            unknowns: self.unknowns.join(&other.unknowns)?,
-        })
     }
 }
 
