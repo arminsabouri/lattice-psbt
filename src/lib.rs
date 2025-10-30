@@ -234,9 +234,14 @@ pub struct WithGlobal {
 
 #[derive(Debug, thiserror::Error)]
 pub enum PsbtConversionError {
-    // TODO more detailed errors
-    #[error("Transaction is not valid")]
-    InvalidTransaction,
+    #[error("Missing outpoint txid for index {0}")]
+    MissingOutpointTxid(usize),
+    #[error("Missing outpoint vout for index {0}")]
+    MissingOutpointVout(usize),
+    #[error("Missing value for output {0}")]
+    MissingValue(usize),
+    #[error("Missing script pubkey for output {0}")]
+    MissingScriptPubkey(usize),
 }
 
 impl TryFrom<WithGlobal> for Psbt {
@@ -261,12 +266,13 @@ impl TryFrom<WithGlobal> for Psbt {
             inputs: psbt
                 .inputs
                 .into_iter()
-                .map(|input| {
+                .enumerate()
+                .map(|(i, input)| {
                     Ok::<psbt_v2::v2::Input, PsbtConversionError>(psbt_v2::v2::Input {
-                        previous_txid: input.txid.ok_or(PsbtConversionError::InvalidTransaction)?,
+                        previous_txid: input.txid.ok_or(PsbtConversionError::MissingOutpointTxid(i))?,
                         spent_output_index: input
                             .vout
-                            .ok_or(PsbtConversionError::InvalidTransaction)?,
+                            .ok_or(PsbtConversionError::MissingOutpointVout(i))?,
                         sequence: input.sequence,
                         witness_utxo: input.prev_out,
                         final_script_sig: input.script_sig,
@@ -297,14 +303,15 @@ impl TryFrom<WithGlobal> for Psbt {
             outputs: psbt
                 .outputs
                 .into_iter()
-                .map(|output| {
+                .enumerate()
+                .map(|(i, output)| {
                     Ok::<psbt_v2::v2::Output, PsbtConversionError>(psbt_v2::v2::Output {
                         amount: output
                             .value
-                            .ok_or(PsbtConversionError::InvalidTransaction)?,
+                            .ok_or(PsbtConversionError::MissingValue(i))?,
                         script_pubkey: output
                             .script_pubkey
-                            .ok_or(PsbtConversionError::InvalidTransaction)?,
+                            .ok_or(PsbtConversionError::MissingScriptPubkey(i))?,
                         redeem_script: output.redeem_script,
                         witness_script: output.witness_script,
                         bip32_derivations: output.bip32_derivations,
@@ -473,7 +480,6 @@ mod tests {
         let tx = tx.apply_bip69_ordering();
         let tx = tx.finalize();
         let psbt = Psbt::try_from(tx).unwrap();
-        // Make assertions about the psbt
         assert_eq!(psbt.global.tx_version, bitcoin::transaction::Version::TWO);
         assert_eq!(psbt.global.input_count, 1);
         assert_eq!(psbt.global.output_count, 1);
@@ -486,6 +492,7 @@ mod tests {
 
         assert_eq!(psbt.inputs[0].previous_txid, my_vin.txid.unwrap());
         assert_eq!(psbt.inputs[0].spent_output_index, my_vin.vout.unwrap());
+        // TODO: more input assertions
         assert_eq!(psbt.outputs[0].amount, my_vout.value.unwrap());
         assert_eq!(
             psbt.outputs[0].script_pubkey,
