@@ -47,6 +47,7 @@ impl_join_field_value!(bitcoin::secp256k1::XOnlyPublicKey);
 impl_join_field_value!(bitcoin::taproot::TapTree);
 impl_join_field_value!(psbt_v2::Version);
 
+// TODO: if there is a key collision and the values are not equal, we should return an error
 // TODO: just need one macro for map types
 // TODO: remove clones
 macro_rules! impl_join_for_hashset {
@@ -96,7 +97,7 @@ pub trait Join {
         Self: Sized;
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct Global {
     pub tx_version: Option<bitcoin::transaction::Version>,
     pub fallback_lock_time: Option<bitcoin::locktime::absolute::LockTime>,
@@ -117,56 +118,34 @@ impl Join for Global {
     }
 }
 
+// Perhaps we need more granular transaction states here:
+// 1. UnorderedInputs
+// 2. UnorderedOutputs
+// 3. WithNoGlobal
+// 4. Finished -> Convertable to a PSBTv2 with non modifiable fields enabled
+// If we accumulate information pertaining to a previous state, we can transition back to the that state, sort and then progress again.
+// merging semantics should be defined on each state. e.g merging a UnOrderedOutputs should not affect the inputs as they are already ordered.
 pub enum Transaction {
-    UnOrderedTransaction(UnOrderedTransaction),
-    OrderedTransaction(OrderedTransaction),
-    // TODO: add a global transaction state
+    UnOrderedInputs(UnOrderedInputs),
+    UnOrderedOutputs(OrderedInputs),
+    WithNoGlobal(OrderedOutputs),
+    ConvertableToPsbt(WithGlobal),
 }
 
-#[derive(Default)]
-pub struct UnOrderedTransaction {
+impl Transaction {
+    pub fn new() -> UnOrderedInputs {
+        UnOrderedInputs::default()
+    }
+}
+
+#[derive(Default, Debug)]
+pub struct UnOrderedInputs {
     inputs: HashSet<Vin>,
     outputs: HashSet<Vout>,
     global: Global,
 }
 
-impl UnOrderedTransaction {
-    pub fn from_transaction(transaction: bitcoin::Transaction) -> Self {
-        Self {
-            inputs: transaction
-                .input
-                .iter()
-                .map(|input| Vin::from_input(input))
-                .collect(),
-            outputs: transaction
-                .output
-                .iter()
-                .map(|output| Vout::from_output(output))
-                .collect(),
-            global: Global::default(),
-        }
-    }
-
-    pub fn add_input(&mut self, input: Vin) {
-        self.inputs.insert(input);
-    }
-
-    pub fn add_output(&mut self, output: Vout) {
-        self.outputs.insert(output);
-    }
-
-    pub fn with_nlocktime(mut self, nlocktime: bitcoin::locktime::absolute::LockTime) -> Self {
-        self.global.fallback_lock_time = Some(nlocktime);
-        self
-    }
-
-    pub fn with_nversion(mut self, nversion: bitcoin::transaction::Version) -> Self {
-        self.global.tx_version = Some(nversion);
-        self
-    }
-}
-
-impl Join for UnOrderedTransaction {
+impl Join for UnOrderedInputs {
     fn join(&self, other: &Self) -> Result<Self, JoinError> {
         Ok(Self {
             inputs: self.inputs.join(&other.inputs)?,
@@ -176,50 +155,110 @@ impl Join for UnOrderedTransaction {
     }
 }
 
-#[derive(Default)]
-pub struct OrderedTransaction {
-    // TODO: this should be vec and ordering should be defined on an index
-    // State machine should reflect ordered inputs, then ordered outputs.
+impl UnOrderedInputs {
+    pub fn apply_bip69_ordering(self) -> OrderedInputs {
+        let mut inputs = self.inputs.into_iter().collect::<Vec<_>>();
+        inputs.sort_by_key(|input| (input.txid, input.vout));
+        OrderedInputs {
+            inputs,
+            outputs: self.outputs.clone(),
+            global: self.global,
+        }
+    }
+    // TODO: sort using some salt as input to chacha20
+}
+
+#[derive(Default, Debug)]
+pub struct OrderedInputs {
+    inputs: Vec<Vin>,
+    outputs: HashSet<Vout>,
+    global: Global,
+}
+
+impl Join for OrderedInputs {
+    fn join(&self, other: &Self) -> Result<Self, JoinError> {
+        Ok(Self {
+            inputs: self.inputs.clone(),
+            outputs: self.outputs.join(&other.outputs)?,
+            global: self.global.join(&other.global)?,
+        })
+    }
+}
+
+impl OrderedInputs {
+    pub fn apply_bip69_ordering(self) -> OrderedOutputs {
+        let mut outputs = self.outputs.into_iter().collect::<Vec<_>>();
+        outputs.sort_by_key(|output| (output.value, output.script_pubkey.clone()));
+        OrderedOutputs {
+            inputs: self.inputs.clone(),
+            outputs,
+            global: self.global,
+        }
+    }
+    // TODO: sort using some salt as input to chacha20
+}
+
+#[derive(Default, Debug)]
+pub struct OrderedOutputs {
     inputs: Vec<Vin>,
     outputs: Vec<Vout>,
     global: Global,
 }
 
-impl From<UnOrderedTransaction> for OrderedTransaction {
-    fn from(unordered: UnOrderedTransaction) -> Self {
-        Self {
-            inputs: unordered.inputs.into_iter().collect(),
-            outputs: unordered.outputs.into_iter().collect(),
-            global: unordered.global,
+impl Join for OrderedOutputs {
+    fn join(&self, other: &Self) -> Result<Self, JoinError> {
+        Ok(Self {
+            inputs: self.inputs.clone(),
+            outputs: self.outputs.clone(),
+            global: self.global.join(&other.global)?,
+        })
+    }
+}
+
+impl OrderedOutputs {
+    pub fn finalize(self) -> WithGlobal {
+        WithGlobal {
+            inputs: self.inputs,
+            outputs: self.outputs,
+            global: self.global,
         }
     }
 }
 
+#[derive(Default, Debug)]
+pub struct WithGlobal {
+    inputs: Vec<Vin>,
+    outputs: Vec<Vout>,
+    global: Global,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum PsbtConversionError {
+    // TODO more detailed errors
     #[error("Transaction is not valid")]
     InvalidTransaction,
 }
 
-impl TryFrom<OrderedTransaction> for Psbt {
+impl TryFrom<WithGlobal> for Psbt {
     type Error = PsbtConversionError;
-    fn try_from(ordered: OrderedTransaction) -> Result<Self, Self::Error> {
+    fn try_from(psbt: WithGlobal) -> Result<Self, Self::Error> {
         let tx = psbt_v2::v2::Psbt {
             global: psbt_v2::v2::Global {
                 version: psbt_v2::Version::TWO,
-                tx_version: ordered
+                // TODO: is this the right default?
+                tx_version: psbt
                     .global
                     .tx_version
-                    .ok_or(PsbtConversionError::InvalidTransaction)?,
-                fallback_lock_time: ordered.global.fallback_lock_time,
-                tx_modifiable_flags: 0,
-                input_count: ordered.inputs.len(),
-                output_count: ordered.outputs.len(),
-                xpubs: ordered.global.xpubs,
-                proprietaries: ordered.global.proprietaries,
-                unknowns: ordered.global.unknowns,
+                    .unwrap_or(bitcoin::transaction::Version::TWO),
+                fallback_lock_time: psbt.global.fallback_lock_time,
+                tx_modifiable_flags: 0u8,
+                input_count: psbt.inputs.len(),
+                output_count: psbt.outputs.len(),
+                xpubs: psbt.global.xpubs,
+                proprietaries: psbt.global.proprietaries,
+                unknowns: psbt.global.unknowns,
             },
-            inputs: ordered
+            inputs: psbt
                 .inputs
                 .into_iter()
                 .map(|input| {
@@ -255,7 +294,7 @@ impl TryFrom<OrderedTransaction> for Psbt {
                     })
                 })
                 .collect::<Result<Vec<_>, PsbtConversionError>>()?,
-            outputs: ordered
+            outputs: psbt
                 .outputs
                 .into_iter()
                 .map(|output| {
@@ -283,7 +322,7 @@ impl TryFrom<OrderedTransaction> for Psbt {
     }
 }
 
-#[derive(Default, Clone, PartialEq, Eq, Hash)]
+#[derive(Default, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Vin {
     pub txid: Option<bitcoin::Txid>,
     pub vout: Option<u32>,
@@ -356,7 +395,7 @@ impl Join for Vin {
     }
 }
 
-#[derive(Clone, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Default, PartialEq, Eq, Hash, Debug)]
 pub struct Vout {
     pub value: Option<bitcoin::Amount>,
     pub script_pubkey: Option<bitcoin::ScriptBuf>,
@@ -418,6 +457,49 @@ impl Join for Vout {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn full_flow() {
+        let mut tx = Transaction::new();
+        let my_vin = Vin::from_input(&bitcoin::transaction::TxIn::default());
+        tx.inputs.insert(my_vin.clone());
+
+        let mut tx = tx.apply_bip69_ordering();
+        let my_vout = Vout::from_output(&bitcoin::TxOut {
+            value: bitcoin::Amount::from_sat(1000),
+            script_pubkey: bitcoin::ScriptBuf::new(),
+        });
+        tx.outputs.insert(my_vout.clone());
+        let tx = tx.apply_bip69_ordering();
+        let tx = tx.finalize();
+        let psbt = Psbt::try_from(tx).unwrap();
+        // Make assertions about the psbt
+        assert_eq!(psbt.global.tx_version, bitcoin::transaction::Version::TWO);
+        assert_eq!(psbt.global.input_count, 1);
+        assert_eq!(psbt.global.output_count, 1);
+        assert_eq!(psbt.global.xpubs, BTreeMap::new());
+        assert_eq!(psbt.global.proprietaries, BTreeMap::new());
+        assert_eq!(psbt.global.unknowns, BTreeMap::new());
+        assert_eq!(psbt.global.fallback_lock_time, None);
+        assert_eq!(psbt.global.tx_modifiable_flags, 0);
+        assert_eq!(psbt.global.version, psbt_v2::Version::TWO);
+
+        assert_eq!(psbt.inputs[0].previous_txid, my_vin.txid.unwrap());
+        assert_eq!(psbt.inputs[0].spent_output_index, my_vin.vout.unwrap());
+        assert_eq!(psbt.outputs[0].amount, my_vout.value.unwrap());
+        assert_eq!(
+            psbt.outputs[0].script_pubkey,
+            my_vout.script_pubkey.unwrap()
+        );
+        assert_eq!(psbt.outputs[0].redeem_script, None);
+        assert_eq!(psbt.outputs[0].witness_script, None);
+        assert_eq!(psbt.outputs[0].bip32_derivations, BTreeMap::new());
+        assert_eq!(psbt.outputs[0].tap_internal_key, None);
+        assert_eq!(psbt.outputs[0].tap_tree, None);
+        assert_eq!(psbt.outputs[0].tap_key_origins, BTreeMap::new());
+        assert_eq!(psbt.outputs[0].proprietaries, BTreeMap::new());
+        assert_eq!(psbt.outputs[0].unknowns, BTreeMap::new());
+    }
 
     #[test]
     fn test_join_outputs() {
