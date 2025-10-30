@@ -1,6 +1,6 @@
 # Lattice-PSBT
 
-A data structure that models PSBTs as a [meet-semilattice](https://en.wikipedia.org/wiki/Semilattice), enabling non-conflicting fragments to merge deterministically for eventual consistency in collaborative transaction construction.
+A data structure that models PSBTs as a [semilattice](https://en.wikipedia.org/wiki/Semilattice), enabling non-conflicting fragments to merge deterministically for eventual consistency in collaborative transaction construction.
 
 Note: This is a work in progress.
 
