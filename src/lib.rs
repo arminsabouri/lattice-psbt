@@ -1,9 +1,10 @@
-use bitcoin::{
-    ScriptBuf, TapLeafHash, XOnlyPublicKey, bip32::KeySource, secp256k1, taproot::TapTree,
-};
+use bitcoin::{TapLeafHash, XOnlyPublicKey, bip32::KeySource};
 use psbt_v2::{raw, v2::Psbt};
 use rand::{SeedableRng, seq::SliceRandom};
-use std::collections::{BTreeMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashSet},
+    ops::Deref,
+};
 
 pub mod global;
 pub mod input;
@@ -114,16 +115,31 @@ pub trait Join {
 // 4. Finished -> Convertable to a PSBTv2 with non modifiable fields enabled
 // If we accumulate information pertaining to a previous state, we can transition back to the that state, sort and then progress again.
 // merging semantics should be defined on each state. e.g merging a UnOrderedOutputs should not affect the inputs as they are already ordered.
-pub enum Transaction {
-    UnOrderedInputs(UnOrderedInputs),
-    UnOrderedOutputs(OrderedInputs),
-    WithNoGlobal(OrderedOutputs),
-    ConvertableToPsbt(WithGlobal),
+// pub enum Transaction {
+//     UnOrderedInputs(UnOrderedInputs),
+//     UnOrderedOutputs(OrderedInputs),
+//     WithNoGlobal(OrderedOutputs),
+//     ConvertableToPsbt(WithGlobal),
+// }
+
+pub trait TypeState {}
+
+pub struct Transaction<State: TypeState> {
+    state: State,
 }
 
-impl Transaction {
-    pub fn new() -> UnOrderedInputs {
-        UnOrderedInputs::default()
+impl<State: TypeState> Transaction<State> {
+    pub fn new() -> Transaction<UnOrderedInputs> {
+        Transaction {
+            state: UnOrderedInputs::default(),
+        }
+    }
+}
+
+impl<State: TypeState> Deref for Transaction<State> {
+    type Target = State;
+    fn deref(&self) -> &Self::Target {
+        &self.state
     }
 }
 
@@ -133,6 +149,8 @@ pub struct UnOrderedInputs {
     outputs: HashSet<Vout>,
     global: Global,
 }
+
+impl TypeState for UnOrderedInputs {}
 
 impl Join for UnOrderedInputs {
     fn join(&self, other: &Self) -> Result<Self, JoinError> {
@@ -144,26 +162,30 @@ impl Join for UnOrderedInputs {
     }
 }
 
-impl UnOrderedInputs {
-    pub fn apply_bip69_ordering(self) -> OrderedInputs {
-        let mut inputs = self.inputs.into_iter().collect::<Vec<_>>();
+impl Transaction<UnOrderedInputs> {
+    pub fn apply_bip69_ordering(self) -> Transaction<OrderedInputs> {
+        let mut inputs = self.state.inputs.into_iter().collect::<Vec<_>>();
         inputs.sort_by_key(|input| (input.txid, input.vout));
-        OrderedInputs {
-            inputs,
-            outputs: self.outputs.clone(),
-            global: self.global,
+        Transaction {
+            state: OrderedInputs {
+                inputs,
+                outputs: self.state.outputs.clone(),
+                global: self.state.global.clone(),
+            },
         }
     }
 
-    pub fn apply_ordering_with_salt(self, salt: &[u8; 32]) -> OrderedInputs {
+    pub fn apply_ordering_with_salt(self, salt: &[u8; 32]) -> Transaction<OrderedInputs> {
         let mut rng = rand_chacha::ChaCha20Rng::from_seed(*salt);
-        let mut inputs = self.inputs.into_iter().collect::<Vec<_>>();
+        let mut inputs = self.state.inputs.into_iter().collect::<Vec<_>>();
         inputs.shuffle(&mut rng);
 
-        OrderedInputs {
-            inputs,
-            outputs: self.outputs.clone(),
-            global: self.global,
+        Transaction {
+            state: OrderedInputs {
+                inputs,
+                outputs: self.state.outputs.clone(),
+                global: self.state.global.clone(),
+            },
         }
     }
 }
@@ -175,6 +197,8 @@ pub struct OrderedInputs {
     global: Global,
 }
 
+impl TypeState for OrderedInputs {}
+
 impl Join for OrderedInputs {
     fn join(&self, other: &Self) -> Result<Self, JoinError> {
         Ok(Self {
@@ -185,26 +209,30 @@ impl Join for OrderedInputs {
     }
 }
 
-impl OrderedInputs {
-    pub fn apply_bip69_ordering(self) -> OrderedOutputs {
-        let mut outputs = self.outputs.into_iter().collect::<Vec<_>>();
+impl Transaction<OrderedInputs> {
+    pub fn apply_bip69_ordering(self) -> Transaction<OrderedOutputs> {
+        let mut outputs = self.state.outputs.into_iter().collect::<Vec<_>>();
         outputs.sort_by_key(|output| (output.value, output.script_pubkey.clone()));
-        OrderedOutputs {
-            inputs: self.inputs.clone(),
-            outputs,
-            global: self.global,
+        Transaction {
+            state: OrderedOutputs {
+                inputs: self.state.inputs.clone(),
+                outputs,
+                global: self.state.global.clone(),
+            },
         }
     }
 
-    pub fn apply_ordering_with_salt(self, salt: &[u8; 32]) -> OrderedOutputs {
+    pub fn apply_ordering_with_salt(self, salt: &[u8; 32]) -> Transaction<OrderedOutputs> {
         let mut rng = rand_chacha::ChaCha20Rng::from_seed(*salt);
-        let mut outputs = self.outputs.into_iter().collect::<Vec<_>>();
+        let mut outputs = self.state.outputs.into_iter().collect::<Vec<_>>();
         outputs.shuffle(&mut rng);
 
-        OrderedOutputs {
-            inputs: self.inputs.clone(),
-            outputs,
-            global: self.global,
+        Transaction {
+            state: OrderedOutputs {
+                inputs: self.state.inputs.clone(),
+                outputs,
+                global: self.state.global.clone(),
+            },
         }
     }
 }
@@ -216,6 +244,8 @@ pub struct OrderedOutputs {
     global: Global,
 }
 
+impl TypeState for OrderedOutputs {}
+
 impl Join for OrderedOutputs {
     fn join(&self, other: &Self) -> Result<Self, JoinError> {
         Ok(Self {
@@ -226,12 +256,14 @@ impl Join for OrderedOutputs {
     }
 }
 
-impl OrderedOutputs {
-    pub fn finalize(self) -> WithGlobal {
-        WithGlobal {
-            inputs: self.inputs,
-            outputs: self.outputs,
-            global: self.global,
+impl Transaction<OrderedOutputs> {
+    pub fn finalize(self) -> Transaction<WithGlobal> {
+        Transaction {
+            state: WithGlobal {
+                inputs: self.state.inputs.clone(),
+                outputs: self.state.outputs.clone(),
+                global: self.state.global.clone(),
+            },
         }
     }
 }
@@ -242,6 +274,8 @@ pub struct WithGlobal {
     outputs: Vec<Vout>,
     global: Global,
 }
+
+impl TypeState for WithGlobal {}
 
 #[derive(Debug, thiserror::Error)]
 pub enum PsbtConversionError {
@@ -255,9 +289,10 @@ pub enum PsbtConversionError {
     MissingScriptPubkey(usize),
 }
 
-impl TryFrom<WithGlobal> for Psbt {
+impl TryFrom<Transaction<WithGlobal>> for Psbt {
     type Error = PsbtConversionError;
-    fn try_from(psbt: WithGlobal) -> Result<Self, Self::Error> {
+    fn try_from(psbt: Transaction<WithGlobal>) -> Result<Self, Self::Error> {
+        let psbt = psbt.state;
         let tx = psbt_v2::v2::Psbt {
             global: psbt_v2::v2::Global {
                 version: psbt_v2::Version::TWO,
@@ -346,16 +381,16 @@ mod tests {
 
     #[test]
     fn full_flow() {
-        let mut tx = Transaction::new();
+        let mut tx = Transaction::<UnOrderedInputs>::new();
         let my_vin = Vin::from_input(&bitcoin::transaction::TxIn::default());
-        tx.inputs.insert(my_vin.clone());
+        tx.state.inputs.insert(my_vin.clone());
 
         let mut tx = tx.apply_bip69_ordering();
         let my_vout = Vout::from_output(&bitcoin::TxOut {
             value: bitcoin::Amount::from_sat(1000),
             script_pubkey: bitcoin::ScriptBuf::new(),
         });
-        tx.outputs.insert(my_vout.clone());
+        tx.state.outputs.insert(my_vout.clone());
         let tx = tx.apply_bip69_ordering();
         let tx = tx.finalize();
         let psbt = Psbt::try_from(tx).unwrap();

@@ -6,7 +6,7 @@ use psbt_v2::raw;
 use crate::{Join, JoinError};
 
 /// Global PSBT field
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct Global {
     pub tx_version: Option<bitcoin::transaction::Version>,
     pub fallback_lock_time: Option<bitcoin::locktime::absolute::LockTime>,
