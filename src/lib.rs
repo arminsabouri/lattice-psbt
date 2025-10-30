@@ -169,20 +169,10 @@ impl Join for UnOrderedInputs {
 }
 
 impl Transaction<UnOrderedInputs> {
-    pub fn apply_bip69_ordering(self) -> Transaction<OrderedInputs> {
-        let mut inputs = self.state.inputs.into_iter().collect::<Vec<_>>();
-        inputs.sort_by_key(|input| (input.previous_output, input.spent_output_index));
-        Transaction {
-            state: OrderedInputs {
-                inputs,
-                outputs: self.state.outputs.clone(),
-                global: self.state.global.clone(),
-            },
-        }
-    }
-
     pub fn apply_ordering_with_salt(self, salt: &[u8; 32]) -> Transaction<OrderedInputs> {
         let mut rng = rand_chacha::ChaCha20Rng::from_seed(*salt);
+        //TODO: Hash all the inputs and then sort instead
+        // H(salt | encoded(outpoint))
         let mut inputs = self.state.inputs.into_iter().collect::<Vec<_>>();
         inputs.shuffle(&mut rng);
 
@@ -216,18 +206,6 @@ impl Join for OrderedInputs {
 }
 
 impl Transaction<OrderedInputs> {
-    pub fn apply_bip69_ordering(self) -> Transaction<OrderedOutputs> {
-        let mut outputs = self.state.outputs.into_iter().collect::<Vec<_>>();
-        outputs.sort_by_key(|output| (output.value, output.script_pubkey.clone()));
-        Transaction {
-            state: OrderedOutputs {
-                inputs: self.state.inputs.clone(),
-                outputs,
-                global: self.state.global.clone(),
-            },
-        }
-    }
-
     pub fn apply_ordering_with_salt(self, salt: &[u8; 32]) -> Transaction<OrderedOutputs> {
         let mut rng = rand_chacha::ChaCha20Rng::from_seed(*salt);
         let mut outputs = self.state.outputs.into_iter().collect::<Vec<_>>();
@@ -391,13 +369,13 @@ mod tests {
         let my_vin = Vin::from_input(&bitcoin::transaction::TxIn::default());
         tx.state.inputs.insert(my_vin.clone());
 
-        let mut tx = tx.apply_bip69_ordering();
+        let mut tx = tx.apply_ordering_with_salt(&[0; 32]);
         let my_vout = Vout::from_output(&bitcoin::TxOut {
             value: bitcoin::Amount::from_sat(1000),
             script_pubkey: bitcoin::ScriptBuf::new(),
         });
         tx.state.outputs.insert(my_vout.clone());
-        let tx = tx.apply_bip69_ordering();
+        let tx = tx.apply_ordering_with_salt(&[0; 32]);
         let tx = tx.finalize();
         let psbt = Psbt::try_from(tx).unwrap();
         assert_eq!(psbt.global.tx_version, bitcoin::transaction::Version::TWO);
@@ -418,7 +396,29 @@ mod tests {
             psbt.inputs[0].spent_output_index,
             my_vin.spent_output_index.unwrap()
         );
-        // TODO: more input assertions
+
+        assert_eq!(psbt.inputs[0].final_script_sig, None);
+        assert_eq!(psbt.inputs[0].final_script_witness, None);
+
+        assert_eq!(psbt.inputs[0].sequence, None);
+        assert_eq!(psbt.inputs[0].min_time, None);
+        assert_eq!(psbt.inputs[0].min_height, None);
+        assert_eq!(psbt.inputs[0].non_witness_utxo, None);
+        assert_eq!(psbt.inputs[0].witness_utxo, None);
+        assert_eq!(psbt.inputs[0].partial_sigs, BTreeMap::new());
+        assert_eq!(psbt.inputs[0].sighash_type, None);
+        assert_eq!(psbt.inputs[0].redeem_script, None);
+        assert_eq!(psbt.inputs[0].witness_script, None);
+        assert_eq!(psbt.inputs[0].bip32_derivations, BTreeMap::new());
+        assert_eq!(psbt.inputs[0].tap_key_sig, None);
+        assert_eq!(psbt.inputs[0].tap_script_sigs, BTreeMap::new());
+        assert_eq!(psbt.inputs[0].tap_scripts, BTreeMap::new());
+        assert_eq!(psbt.inputs[0].tap_key_origins, BTreeMap::new());
+        assert_eq!(psbt.inputs[0].tap_internal_key, None);
+        assert_eq!(psbt.inputs[0].tap_merkle_root, None);
+        assert_eq!(psbt.inputs[0].proprietaries, BTreeMap::new());
+        assert_eq!(psbt.inputs[0].unknowns, BTreeMap::new());
+
         assert_eq!(psbt.outputs[0].amount, my_vout.value.unwrap());
         assert_eq!(
             psbt.outputs[0].script_pubkey,
