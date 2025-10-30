@@ -2,6 +2,7 @@ use bitcoin::{
     ScriptBuf, TapLeafHash, XOnlyPublicKey, bip32::KeySource, secp256k1, taproot::TapTree,
 };
 use psbt_v2::{raw, v2::Psbt};
+use rand::{SeedableRng, seq::SliceRandom};
 use std::collections::{BTreeMap, HashSet};
 
 /*
@@ -165,7 +166,18 @@ impl UnOrderedInputs {
             global: self.global,
         }
     }
-    // TODO: sort using some salt as input to chacha20
+
+    pub fn apply_ordering_with_salt(self, salt: &[u8; 32]) -> OrderedInputs {
+        let mut rng = rand_chacha::ChaCha20Rng::from_seed(*salt);
+        let mut inputs = self.inputs.into_iter().collect::<Vec<_>>();
+        inputs.shuffle(&mut rng);
+
+        OrderedInputs {
+            inputs,
+            outputs: self.outputs.clone(),
+            global: self.global,
+        }
+    }
 }
 
 #[derive(Default, Debug)]
@@ -195,7 +207,18 @@ impl OrderedInputs {
             global: self.global,
         }
     }
-    // TODO: sort using some salt as input to chacha20
+
+    pub fn apply_ordering_with_salt(self, salt: &[u8; 32]) -> OrderedOutputs {
+        let mut rng = rand_chacha::ChaCha20Rng::from_seed(*salt);
+        let mut outputs = self.outputs.into_iter().collect::<Vec<_>>();
+        outputs.shuffle(&mut rng);
+
+        OrderedOutputs {
+            inputs: self.inputs.clone(),
+            outputs,
+            global: self.global,
+        }
+    }
 }
 
 #[derive(Default, Debug)]
@@ -269,7 +292,9 @@ impl TryFrom<WithGlobal> for Psbt {
                 .enumerate()
                 .map(|(i, input)| {
                     Ok::<psbt_v2::v2::Input, PsbtConversionError>(psbt_v2::v2::Input {
-                        previous_txid: input.txid.ok_or(PsbtConversionError::MissingOutpointTxid(i))?,
+                        previous_txid: input
+                            .txid
+                            .ok_or(PsbtConversionError::MissingOutpointTxid(i))?,
                         spent_output_index: input
                             .vout
                             .ok_or(PsbtConversionError::MissingOutpointVout(i))?,
@@ -306,9 +331,7 @@ impl TryFrom<WithGlobal> for Psbt {
                 .enumerate()
                 .map(|(i, output)| {
                     Ok::<psbt_v2::v2::Output, PsbtConversionError>(psbt_v2::v2::Output {
-                        amount: output
-                            .value
-                            .ok_or(PsbtConversionError::MissingValue(i))?,
+                        amount: output.value.ok_or(PsbtConversionError::MissingValue(i))?,
                         script_pubkey: output
                             .script_pubkey
                             .ok_or(PsbtConversionError::MissingScriptPubkey(i))?,
