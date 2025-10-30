@@ -108,20 +108,6 @@ pub trait Join {
         Self: Sized;
 }
 
-// Perhaps we need more granular transaction states here:
-// 1. UnorderedInputs
-// 2. UnorderedOutputs
-// 3. WithNoGlobal
-// 4. Finished -> Convertable to a PSBTv2 with non modifiable fields enabled
-// If we accumulate information pertaining to a previous state, we can transition back to the that state, sort and then progress again.
-// merging semantics should be defined on each state. e.g merging a UnOrderedOutputs should not affect the inputs as they are already ordered.
-// pub enum Transaction {
-//     UnOrderedInputs(UnOrderedInputs),
-//     UnOrderedOutputs(OrderedInputs),
-//     WithNoGlobal(OrderedOutputs),
-//     ConvertableToPsbt(WithGlobal),
-// }
-
 pub trait TypeState {}
 
 pub struct Transaction<State: TypeState> {
