@@ -35,10 +35,22 @@ Concretely, we model a PSBT as a state-based conflict-free replicated data type 
 
 The open question is whether this requires an extension to BIP-370 or a new standard that more fundamentally relaxes the PSBT role model.
 
-#### TODOs
+For more information on CRDTs please see this [comprehensive write up](https://inria.hal.science/file/index/docid/555588/filename/techreport.pdf)
 
-- [ ] Add Property tests
-- [ ] minimal CI pipeline
-- [ ] Convert to PSBTv0 along side PSBTv2
+## TODOs
+
+CRDT correctness:
+
+- [ ] Fix `BTreeMap::join`  currently non-commutative (last writer wins on key collision). Should return an error on conflicting values, consistent with how `Option<T>` join handles conflicts.
+- [ ] Add property tests verifying the semilattice laws (commutativity, associativity, idempotency) across all `Join` impls. Without these, convergence is asserted by intuition rather than checked.
+- [ ] Document explicitly that `join` is a conflict-detecting partial join rather than a total one. Convergence is guaranteed only over mutually compatible states a conflict is a protocol violation, not something to resolve.
+
+Protocol / features
+
+- [ ] Convert to PSBTv0 alongside PSBTv2
 - [ ] Allow for unordered internal inputs and outputs
 - [ ] Joining on the typestate should revert state in some cases ([lightning dual funding](https://bitcoinops.org/en/topics/dual-funding/))
+
+Infrastructure
+
+- [ ] Minimal CI pipeline
