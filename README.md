@@ -4,25 +4,41 @@ A data structure that models PSBTs as a [semilattice](https://en.wikipedia.org/w
 
 Note: This is a work in progress.
 
+## Motivation
+
+PSBT ([BIP-174](https://github.com/bitcoin/bips/blob/master/bip-0174.mediawiki) / [BIP-370](https://github.com/bitcoin/bips/blob/master/bip-0370.mediawiki)) is a data encoding format that packages everything a signer needs to produce a valid signatures (inputs, outputs, BIP-32 derivation paths, etc.) The standard also defines functional roles: a constructor that builds the base transaction, one or more signers that attach partial signatures, and a combiner that merges the fragments into a final transaction.
+
+But PSBT itself is completely agnostic about semantics. It doesn’t express any notion of ordering, data dependency, or construction lifecycles. It’s a static container and not a model for how transactions evolve. Most protocols end up ignoring the "roles" defined in the specs.
+
+This becomes a problem for collaborative transaction construction protocols where multiple parties cooperate in a privacy-preserving manner to construct a transaction without a central coordinator. Two concrete examples:
+
+- Silent Payments: outputs depend on the full set of inputs, so all inputs must be known and sorted before an output key can even be derived.
+- Coordinator-less CoinJoins: peers learn and merge transaction fragments incrementally, requiring deterministic merge and ordering semantics that still respect inner-transaction dependencies.
+
+Without a shared model for how PSBTs are constructed and merged over time, each protocol is forced to reinvent ad-hoc solutions. This fragments the ecosystem and makes wallet interoperability much harder.
+
 ## The Problem
 
-[BIP-174](https://github.com/bitcoin/bips/blob/master/bip-0174.mediawiki) defines a partially signed transaction format, enabling one party to construct a transaction and multiple parties to cooperatively sign it.
-[BIP-370](https://github.com/bitcoin/bips/blob/master/bip-0370.mediawiki) improves on this by defining how inputs and outputs can be added to a PSBT after its creation -- useful for coordinator-less collaborative protocols like Payjoin (BIP-77/78).
+Current PSBT standards are insufficient for coordinator-less transaction construction protocols. The existing role model (constructor / signer / combiner) assumes a single party builds the transaction skeleton upfront. It provides no standard way to express:
 
-However in other collaborative protocols, participants discover transaction components independently and without a central coordinator to create the transaction. Each peer needs to converge on the same transaction to sign, yet existing PSBT rules don’t define how unordered independently learned fragments should be combined. As a result, developers have resorted to ad-hoc extensions and off-spec solutions.
+- Ordering semantics: a canonical ordering that all peers can independently derive
+- Merge semantics: deterministic rules for combining independently learned fragments
+- Data dependencies: constraints that some fields (e.g. output keys) can only be finalized once other fields (e.g. the full input set) are known
+
+For example: when "inputs finalized" PSBT is merged with a PSBT that includes new inputs, those inputs should be rejected.  
 
 ## The Solution
 
-We propose a relaxation of BIP-370 that defines merge semantics for partially ordered PSBT fragments.
-This approach specifies deterministic rules for joining independently learned transaction components so peers reach a consistent, ordered PSBT without coordination.
+We propose relaxing the current PSBT model into something that encodes ordering, merge, and data-dependency semantics directly in the format.
 
-By modeling a PSBT as a state-based conflict-free replicated data type (CRDT) wallets can merge updates as they learn new inputs, outputs, or other metadata. This ensures that collaboration produces a coherent transaction state regardless of message ordering or duplication.
+Concretely, we model a PSBT as a state-based conflict-free replicated data type (CRDT) -- a [semilattice](https://en.wikipedia.org/wiki/Semilattice) -- where peers can merge updates as they learn new inputs, outputs, or other metadata. This ensures collaboration produces a coherent transaction state regardless of message ordering or duplication, without requiring a coordinator.
 
-#### TODOs:
+The open question is whether this requires an extension to BIP-370 or a new standard that more fundamentally relaxes the PSBT role model.
+
+#### TODOs
 
 - [ ] Add Property tests
 - [ ] minimal CI pipeline
 - [ ] Convert to PSBTv0 along side PSBTv2
 - [ ] Allow for unordered internal inputs and outputs
-- [ ] Joining on the typestate should revert state in some cases (lightning dual funding)
-- [ ] minimal fragment should be turned into gramgnets
+- [ ] Joining on the typestate should revert state in some cases ([lightning dual funding](https://bitcoinops.org/en/topics/dual-funding/))
