@@ -1,6 +1,10 @@
-use bitcoin::{TapLeafHash, XOnlyPublicKey, bip32::KeySource};
+use bitcoin::{
+    TapLeafHash, XOnlyPublicKey,
+    bip32::KeySource,
+    consensus::Encodable,
+    hashes::{Hash, HashEngine, sha256::Hash as Sha256},
+};
 use psbt_v2::{raw, v2::Psbt};
-use rand::{SeedableRng, seq::SliceRandom};
 use std::{
     collections::{BTreeMap, HashSet},
     ops::Deref,
@@ -169,12 +173,22 @@ impl Join for UnOrderedInputs {
 }
 
 impl Transaction<UnOrderedInputs> {
+    // TODO: should return in Result
     pub fn apply_ordering_with_salt(self, salt: &[u8; 32]) -> Transaction<OrderedInputs> {
-        let mut rng = rand_chacha::ChaCha20Rng::from_seed(*salt);
-        //TODO: Hash all the inputs and then sort instead
-        // H(salt | encoded(outpoint))
-        let mut inputs = self.state.inputs.into_iter().collect::<Vec<_>>();
-        inputs.shuffle(&mut rng);
+        let mut inputs: Vec<_> = self.state.inputs.into_iter().collect();
+
+        inputs.sort_by_key(|input| {
+            let ot = bitcoin::OutPoint::new(
+                input.previous_output.unwrap(),
+                input.spent_output_index.unwrap(),
+            );
+            let mut buf = Vec::new();
+            ot.consensus_encode(&mut buf).unwrap();
+            let mut hash = Sha256::engine();
+            hash.input(salt);
+            hash.input(&buf);
+            Sha256::from_engine(hash)
+        });
 
         Transaction {
             state: OrderedInputs {
@@ -206,10 +220,21 @@ impl Join for OrderedInputs {
 }
 
 impl Transaction<OrderedInputs> {
+    // TODO: should return in Result
     pub fn apply_ordering_with_salt(self, salt: &[u8; 32]) -> Transaction<OrderedOutputs> {
-        let mut rng = rand_chacha::ChaCha20Rng::from_seed(*salt);
-        let mut outputs = self.state.outputs.into_iter().collect::<Vec<_>>();
-        outputs.shuffle(&mut rng);
+        let mut outputs: Vec<_> = self.state.outputs.iter().cloned().collect();
+        outputs.sort_by_key(|output| {
+            let mut buf = Vec::new();
+            let txout = bitcoin::TxOut {
+                value: output.value.unwrap(),
+                script_pubkey: output.script_pubkey.clone().unwrap(),
+            };
+            txout.consensus_encode(&mut buf).unwrap();
+            let mut hash = Sha256::engine();
+            hash.input(salt);
+            hash.input(&buf);
+            Sha256::from_engine(hash)
+        });
 
         Transaction {
             state: OrderedOutputs {

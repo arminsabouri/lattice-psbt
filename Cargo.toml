@@ -7,5 +7,3 @@ edition = "2024"
 bitcoin = "0.32.2"
 thiserror = "2.0.17"
 psbt-v2 = { git = "https://github.com/arminsabouri/rust-psbt", branch = "update-consensus-decode-trait-bound" }
-rand = "0.8.5"
-rand_chacha = "0.3.1"

@@ -17,3 +17,12 @@ We propose a relaxation of BIP-370 that defines merge semantics for partially or
 This approach specifies deterministic rules for joining independently learned transaction components so peers reach a consistent, ordered PSBT without coordination.
 
 By modeling a PSBT as a state-based conflict-free replicated data type (CRDT) wallets can merge updates as they learn new inputs, outputs, or other metadata. This ensures that collaboration produces a coherent transaction state regardless of message ordering or duplication.
+
+#### TODOs:
+
+- [ ] Add Property tests
+- [ ] minimal CI pipeline
+- [ ] Convert to PSBTv0 along side PSBTv2
+- [ ] Allow for unordered internal inputs and outputs
+- [ ] Joining on the typestate should revert state in some cases (lightning dual funding)
+- [ ] minimal fragment should be turned into gramgnets
