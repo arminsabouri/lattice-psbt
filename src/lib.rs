@@ -119,12 +119,49 @@ impl_join_for_btreemap!(
     (bitcoin::ScriptBuf, bitcoin::taproot::LeafVersion)
 );
 
+/// Returns `Err(JoinError::InputsAlreadyOrdered)` if `incoming` contains any input whose
+/// outpoint is not already present in `ordered`.
+fn reject_new_inputs(ordered: &[Vin], incoming: &[Vin]) -> Result<(), JoinError> {
+    let known: HashSet<bitcoin::OutPoint> = ordered
+        .iter()
+        .map(|i| bitcoin::OutPoint::new(i.previous_output, i.spent_output_index))
+        .collect();
+    for input in incoming {
+        if !known.contains(&bitcoin::OutPoint::new(
+            input.previous_output,
+            input.spent_output_index,
+        )) {
+            return Err(JoinError::InputsAlreadyOrdered);
+        }
+    }
+    Ok(())
+}
+
+/// Returns `Err(JoinError::OutputsAlreadyOrdered)` if `incoming` contains any output whose
+/// `(value, script_pubkey)` pair is not already present in `ordered`.
+fn reject_new_outputs(ordered: &[Vout], incoming: &[Vout]) -> Result<(), JoinError> {
+    let known: HashSet<(bitcoin::Amount, &bitcoin::ScriptBuf)> = ordered
+        .iter()
+        .map(|o| (o.value, &o.script_pubkey))
+        .collect();
+    for output in incoming {
+        if !known.contains(&(output.value, &output.script_pubkey)) {
+            return Err(JoinError::OutputsAlreadyOrdered);
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum JoinError {
     #[error("Scalar disagree")]
     ScalarDisagree,
     #[error("Structural mismatch / key collision")]
     StructuralMismatch,
+    #[error("Inputs are already ordered; new inputs cannot be added")]
+    InputsAlreadyOrdered,
+    #[error("Outputs are already ordered; new outputs cannot be added")]
+    OutputsAlreadyOrdered,
 }
 
 /// Trait for PSBT fragments that can be joined.
@@ -284,6 +321,7 @@ impl TypeState for OrderedInputs {}
 
 impl Join for OrderedInputs {
     fn join(&self, other: &Self) -> Result<Self, JoinError> {
+        reject_new_inputs(&self.inputs, &other.inputs)?;
         Ok(Self {
             inputs: self.inputs.clone(),
             outputs: self.outputs.join(&other.outputs)?,
@@ -327,6 +365,7 @@ impl TypeState for PartialOutputs {}
 
 impl Join for PartialOutputs {
     fn join(&self, other: &Self) -> Result<Self, JoinError> {
+        reject_new_inputs(&self.inputs, &other.inputs)?;
         Ok(Self {
             inputs: self.inputs.clone(),
             outputs: self.outputs.join(&other.outputs)?,
@@ -403,6 +442,8 @@ impl TypeState for OrderedOutputs {}
 
 impl Join for OrderedOutputs {
     fn join(&self, other: &Self) -> Result<Self, JoinError> {
+        reject_new_inputs(&self.inputs, &other.inputs)?;
+        reject_new_outputs(&self.outputs, &other.outputs)?;
         Ok(Self {
             inputs: self.inputs.clone(),
             outputs: self.outputs.clone(),
@@ -615,5 +656,141 @@ mod tests {
             Some(output_script_pubkey)
         );
         assert_eq!(p1_joined.value, Some(output_amount));
+    }
+
+    fn make_vin(txid_byte: u8, vout: u32) -> Vin {
+        let mut txid_bytes = [0u8; 32];
+        txid_bytes[0] = txid_byte;
+        Vin {
+            previous_output: bitcoin::Txid::from_byte_array(txid_bytes),
+            spent_output_index: vout,
+            data: input::VinData::default(),
+        }
+    }
+
+    fn make_vout(sats: u64) -> Vout {
+        Vout {
+            value: bitcoin::Amount::from_sat(sats),
+            script_pubkey: bitcoin::ScriptBuf::new(),
+            data: output::VoutData::default(),
+        }
+    }
+
+    #[test]
+    fn ordered_inputs_rejects_new_input_on_join() {
+        let vin_a = make_vin(0x01, 0);
+        let vin_b = make_vin(0x02, 0);
+
+        let base = OrderedInputs {
+            inputs: vec![vin_a.clone()],
+            outputs: HashSet::new(),
+            global: Global::default(),
+        };
+
+        // Same input: join succeeds
+        let same = OrderedInputs {
+            inputs: vec![vin_a.clone()],
+            outputs: HashSet::new(),
+            global: Global::default(),
+        };
+        assert!(base.join(&same).is_ok());
+
+        // Extra input not in base: join must fail
+        let with_extra = OrderedInputs {
+            inputs: vec![vin_a.clone(), vin_b.clone()],
+            outputs: HashSet::new(),
+            global: Global::default(),
+        };
+        assert_eq!(
+            base.join(&with_extra).unwrap_err(),
+            JoinError::InputsAlreadyOrdered
+        );
+
+        // Completely different input: join must fail
+        let different = OrderedInputs {
+            inputs: vec![vin_b.clone()],
+            outputs: HashSet::new(),
+            global: Global::default(),
+        };
+        assert_eq!(
+            base.join(&different).unwrap_err(),
+            JoinError::InputsAlreadyOrdered
+        );
+    }
+
+    #[test]
+    fn partial_outputs_rejects_new_input_on_join() {
+        let vin_a = make_vin(0x01, 0);
+        let vin_b = make_vin(0x02, 0);
+        let vout_a = make_vout(1000);
+
+        let base = PartialOutputs {
+            inputs: vec![vin_a.clone()],
+            outputs: HashSet::from([vout_a.clone()]),
+            global: Global::default(),
+        };
+
+        // New output is fine: outputs not yet ordered
+        let extra_output = PartialOutputs {
+            inputs: vec![vin_a.clone()],
+            outputs: HashSet::from([make_vout(2000)]),
+            global: Global::default(),
+        };
+        assert!(base.join(&extra_output).is_ok());
+
+        // New input is not fine
+        let extra_input = PartialOutputs {
+            inputs: vec![vin_a.clone(), vin_b.clone()],
+            outputs: HashSet::from([vout_a.clone()]),
+            global: Global::default(),
+        };
+        assert_eq!(
+            base.join(&extra_input).unwrap_err(),
+            JoinError::InputsAlreadyOrdered
+        );
+    }
+
+    #[test]
+    fn ordered_outputs_rejects_new_input_or_output_on_join() {
+        let vin_a = make_vin(0x01, 0);
+        let vin_b = make_vin(0x02, 0);
+        let vout_a = make_vout(1000);
+        let vout_b = make_vout(2000);
+
+        let base = OrderedOutputs {
+            inputs: vec![vin_a.clone()],
+            outputs: vec![vout_a.clone()],
+            global: Global::default(),
+        };
+
+        // Identical: succeeds
+        let same = OrderedOutputs {
+            inputs: vec![vin_a.clone()],
+            outputs: vec![vout_a.clone()],
+            global: Global::default(),
+        };
+        assert!(base.join(&same).is_ok());
+
+        // New input: fails
+        let extra_input = OrderedOutputs {
+            inputs: vec![vin_a.clone(), vin_b.clone()],
+            outputs: vec![vout_a.clone()],
+            global: Global::default(),
+        };
+        assert_eq!(
+            base.join(&extra_input).unwrap_err(),
+            JoinError::InputsAlreadyOrdered
+        );
+
+        // New output: fails
+        let extra_output = OrderedOutputs {
+            inputs: vec![vin_a.clone()],
+            outputs: vec![vout_a.clone(), vout_b.clone()],
+            global: Global::default(),
+        };
+        assert_eq!(
+            base.join(&extra_output).unwrap_err(),
+            JoinError::OutputsAlreadyOrdered
+        );
     }
 }
