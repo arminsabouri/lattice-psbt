@@ -240,6 +240,18 @@ impl Transaction<PartialInputs> {
             },
         }
     }
+
+    pub fn apply_lexicographic_ordering(self) -> Transaction<OrderedInputs> {
+        let mut inputs: Vec<_> = self.state.inputs.into_iter().collect();
+        inputs.sort_by_key(|input| (input.previous_output, input.spent_output_index));
+        Transaction {
+            state: OrderedInputs {
+                inputs,
+                outputs: self.state.outputs,
+                global: self.state.global,
+            },
+        }
+    }
 }
 
 #[derive(Default, Debug)]
@@ -321,6 +333,18 @@ impl Transaction<PartialOutputs> {
             Sha256::from_engine(hash)
         });
 
+        Transaction {
+            state: OrderedOutputs {
+                inputs: self.state.inputs,
+                outputs,
+                global: self.state.global,
+            },
+        }
+    }
+
+    pub fn apply_lexicographic_ordering(self) -> Transaction<OrderedOutputs> {
+        let mut outputs: Vec<_> = self.state.outputs.into_iter().collect();
+        outputs.sort_by_key(|output| (output.value, output.script_pubkey.clone()));
         Transaction {
             state: OrderedOutputs {
                 inputs: self.state.inputs,
