@@ -252,6 +252,25 @@ impl Transaction<PartialInputs> {
             },
         }
     }
+
+    pub fn apply_ordering_with<F>(self, mut compare: F) -> Transaction<OrderedInputs>
+    where
+        F: FnMut(&bitcoin::OutPoint, &bitcoin::OutPoint) -> std::cmp::Ordering,
+    {
+        let mut inputs: Vec<_> = self.state.inputs.into_iter().collect();
+        inputs.sort_by(|a, b| {
+            let a = bitcoin::OutPoint::new(a.previous_output, a.spent_output_index);
+            let b = bitcoin::OutPoint::new(b.previous_output, b.spent_output_index);
+            compare(&a, &b)
+        });
+        Transaction {
+            state: OrderedInputs {
+                inputs,
+                outputs: self.state.outputs,
+                global: self.state.global,
+            },
+        }
+    }
 }
 
 #[derive(Default, Debug)]
@@ -345,6 +364,24 @@ impl Transaction<PartialOutputs> {
     pub fn apply_lexicographic_ordering(self) -> Transaction<OrderedOutputs> {
         let mut outputs: Vec<_> = self.state.outputs.into_iter().collect();
         outputs.sort_by_key(|output| (output.value, output.script_pubkey.clone()));
+        Transaction {
+            state: OrderedOutputs {
+                inputs: self.state.inputs,
+                outputs,
+                global: self.state.global,
+            },
+        }
+    }
+
+    pub fn apply_ordering_with<F>(self, mut compare: F) -> Transaction<OrderedOutputs>
+    where
+        F: FnMut(
+            (bitcoin::Amount, &bitcoin::ScriptBuf),
+            (bitcoin::Amount, &bitcoin::ScriptBuf),
+        ) -> std::cmp::Ordering,
+    {
+        let mut outputs: Vec<_> = self.state.outputs.into_iter().collect();
+        outputs.sort_by(|a, b| compare((a.value, &a.script_pubkey), (b.value, &b.script_pubkey)));
         Transaction {
             state: OrderedOutputs {
                 inputs: self.state.inputs,
