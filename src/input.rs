@@ -4,18 +4,9 @@ use psbt_v2::{PsbtSighashType, raw};
 
 use crate::{Join, JoinError};
 
+/// All PSBT input fields except the outpoint (previous_output, spent_output_index).
 #[derive(Default, Clone, PartialEq, Eq, Hash, Debug)]
-pub struct Vin {
-    /// The txid of the previous transaction whose output at `self.spent_output_index` is being spent.
-    ///
-    /// In other words, the output being spent by this `Input` is:
-    ///
-    ///  `OutPoint { txid: self.previous_txid, vout: self.spent_output_index }`
-    pub previous_output: Option<bitcoin::Txid>,
-
-    /// The index of the output being spent in the transaction with the txid of `self.previous_txid`.
-    pub spent_output_index: Option<u32>,
-
+pub struct VinData {
     /// The sequence number of this input.
     ///
     /// If omitted, assumed to be the final sequence number ([`Sequence::MAX`]).
@@ -86,22 +77,9 @@ pub struct Vin {
     pub unknowns: BTreeMap<raw::Key, Vec<u8>>,
 }
 
-impl Vin {
-    pub fn from_input(input: &bitcoin::transaction::TxIn) -> Self {
-        Self {
-            previous_output: Some(input.previous_output.txid),
-            spent_output_index: Some(input.previous_output.vout),
-            // TODO: add the rest of the fields
-            ..Default::default()
-        }
-    }
-}
-
-impl Join for Vin {
+impl Join for VinData {
     fn join(&self, other: &Self) -> Result<Self, JoinError> {
         Ok(Self {
-            previous_output: self.previous_output.join(&other.previous_output)?,
-            spent_output_index: self.spent_output_index.join(&other.spent_output_index)?,
             sequence: self.sequence.join(&other.sequence)?,
             min_time: self.min_time.join(&other.min_time)?,
             min_height: self.min_height.join(&other.min_height)?,
@@ -129,5 +107,119 @@ impl Join for Vin {
             proprietaries: self.proprietaries.join(&other.proprietaries)?,
             unknowns: self.unknowns.join(&other.unknowns)?,
         })
+    }
+}
+
+/// A PSBT input whose outpoint (previous tx + vout) may not yet be known.
+#[derive(Default, Clone, PartialEq, Eq, Hash, Debug)]
+pub struct PartialVin {
+    /// The txid of the previous transaction output being spent, if known.
+    pub previous_output: Option<bitcoin::Txid>,
+    /// The index of the output being spent, if known.
+    pub spent_output_index: Option<u32>,
+    pub data: VinData,
+}
+
+impl std::ops::Deref for PartialVin {
+    type Target = VinData;
+    fn deref(&self) -> &VinData {
+        &self.data
+    }
+}
+
+impl std::ops::DerefMut for PartialVin {
+    fn deref_mut(&mut self) -> &mut VinData {
+        &mut self.data
+    }
+}
+
+impl Join for PartialVin {
+    fn join(&self, other: &Self) -> Result<Self, JoinError> {
+        Ok(Self {
+            previous_output: self.previous_output.join(&other.previous_output)?,
+            spent_output_index: self.spent_output_index.join(&other.spent_output_index)?,
+            data: self.data.join(&other.data)?,
+        })
+    }
+}
+
+/// A PSBT input with a known outpoint.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct Vin {
+    /// The txid of the previous transaction output being spent.
+    pub previous_output: bitcoin::Txid,
+    /// The index of the output being spent.
+    pub spent_output_index: u32,
+    pub data: VinData,
+}
+
+impl std::ops::Deref for Vin {
+    type Target = VinData;
+    fn deref(&self) -> &VinData {
+        &self.data
+    }
+}
+
+impl std::ops::DerefMut for Vin {
+    fn deref_mut(&mut self) -> &mut VinData {
+        &mut self.data
+    }
+}
+
+impl Vin {
+    pub fn from_input(input: &bitcoin::transaction::TxIn) -> Self {
+        Self {
+            previous_output: input.previous_output.txid,
+            spent_output_index: input.previous_output.vout,
+            data: VinData::default(),
+        }
+    }
+}
+
+impl Join for Vin {
+    fn join(&self, other: &Self) -> Result<Self, JoinError> {
+        if self.previous_output != other.previous_output
+            || self.spent_output_index != other.spent_output_index
+        {
+            return Err(JoinError::ScalarDisagree);
+        }
+        Ok(Self {
+            previous_output: self.previous_output,
+            spent_output_index: self.spent_output_index,
+            data: self.data.join(&other.data)?,
+        })
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum VinConversionError {
+    #[error("Missing previous output txid")]
+    MissingTxid,
+    #[error("Missing spent output index (vout)")]
+    MissingVout,
+}
+
+impl TryFrom<PartialVin> for Vin {
+    type Error = VinConversionError;
+    fn try_from(partial: PartialVin) -> Result<Self, Self::Error> {
+        Ok(Self {
+            previous_output: partial
+                .previous_output
+                .ok_or(VinConversionError::MissingTxid)?,
+            spent_output_index: partial
+                .spent_output_index
+                .ok_or(VinConversionError::MissingVout)?,
+            data: partial.data,
+        })
+    }
+}
+
+impl From<Vin> for PartialVin {
+    fn from(vin: Vin) -> Self {
+        Self {
+            previous_output: Some(vin.previous_output),
+            spent_output_index: Some(vin.spent_output_index),
+            data: vin.data,
+        }
     }
 }

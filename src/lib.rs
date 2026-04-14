@@ -15,8 +15,8 @@ pub mod input;
 pub mod output;
 
 use global::Global;
-use input::Vin;
-use output::Vout;
+use input::{PartialVin, Vin, VinConversionError};
+use output::{PartialVout, Vout, VoutConversionError};
 
 /*
 Our goals: Create a monotone datastructure that can take un ordered transaction components can merge or joins them if they are non-conflicting.
@@ -82,7 +82,9 @@ macro_rules! impl_join_for_hashset {
     };
 }
 
+impl_join_for_hashset!(PartialVin);
 impl_join_for_hashset!(Vin);
+impl_join_for_hashset!(PartialVout);
 impl_join_for_hashset!(Vout);
 
 macro_rules! impl_join_for_btreemap {
@@ -153,11 +155,12 @@ impl<State: TypeState> Deref for Transaction<State> {
     }
 }
 
+/// Initial state: inputs and outputs are partially specified.
 #[derive(Default, Debug)]
 pub struct UnOrderedInputs {
-    inputs: HashSet<Vin>,
-    outputs: HashSet<Vout>,
-    global: Global,
+    pub inputs: HashSet<PartialVin>,
+    pub outputs: HashSet<PartialVout>,
+    pub global: Global,
 }
 
 impl TypeState for UnOrderedInputs {}
@@ -173,15 +176,54 @@ impl Join for UnOrderedInputs {
 }
 
 impl Transaction<UnOrderedInputs> {
-    // TODO: should return in Result
+    /// Promote all inputs to [`Vin`] by requiring that every outpoint is known.
+    ///
+    /// Returns an error on the first input that is missing a txid or vout.
+    pub fn try_resolve_outpoints(self) -> Result<Transaction<PartialInputs>, VinConversionError> {
+        let inputs = self
+            .state
+            .inputs
+            .into_iter()
+            .map(Vin::try_from)
+            .collect::<Result<HashSet<Vin>, _>>()?;
+
+        Ok(Transaction {
+            state: PartialInputs {
+                inputs,
+                outputs: self.state.outputs,
+                global: self.state.global,
+            },
+        })
+    }
+}
+
+/// Intermediate state: all inputs have known outpoints but have not yet been ordered.
+#[derive(Default, Debug)]
+pub struct PartialInputs {
+    pub inputs: HashSet<Vin>,
+    pub outputs: HashSet<PartialVout>,
+    pub global: Global,
+}
+
+impl TypeState for PartialInputs {}
+
+impl Join for PartialInputs {
+    fn join(&self, other: &Self) -> Result<Self, JoinError> {
+        Ok(Self {
+            inputs: self.inputs.join(&other.inputs)?,
+            outputs: self.outputs.join(&other.outputs)?,
+            global: self.global.join(&other.global)?,
+        })
+    }
+}
+
+impl Transaction<PartialInputs> {
+    // TODO: should return a Result
     pub fn apply_ordering_with_salt(self, salt: &[u8; 32]) -> Transaction<OrderedInputs> {
         let mut inputs: Vec<_> = self.state.inputs.into_iter().collect();
 
         inputs.sort_by_key(|input| {
-            let ot = bitcoin::OutPoint::new(
-                input.previous_output.unwrap(),
-                input.spent_output_index.unwrap(),
-            );
+            let ot = bitcoin::OutPoint::new(input.previous_output, input.spent_output_index);
             let mut buf = Vec::new();
             ot.consensus_encode(&mut buf).unwrap();
             let mut hash = Sha256::engine();
@@ -193,8 +235,8 @@ impl Transaction<UnOrderedInputs> {
         Transaction {
             state: OrderedInputs {
                 inputs,
-                outputs: self.state.outputs.clone(),
-                global: self.state.global.clone(),
+                outputs: self.state.outputs,
+                global: self.state.global,
             },
         }
     }
@@ -202,9 +244,9 @@ impl Transaction<UnOrderedInputs> {
 
 #[derive(Default, Debug)]
 pub struct OrderedInputs {
-    inputs: Vec<Vin>,
-    outputs: HashSet<Vout>,
-    global: Global,
+    pub inputs: Vec<Vin>,
+    pub outputs: HashSet<PartialVout>,
+    pub global: Global,
 }
 
 impl TypeState for OrderedInputs {}
@@ -220,14 +262,57 @@ impl Join for OrderedInputs {
 }
 
 impl Transaction<OrderedInputs> {
-    // TODO: should return in Result
+    /// Promote all outputs to [`Vout`] by requiring that every value and script_pubkey is known.
+    ///
+    /// Returns an error on the first output that is missing a value or script_pubkey.
+    pub fn try_resolve_outputs(self) -> Result<Transaction<PartialOutputs>, VoutConversionError> {
+        let outputs = self
+            .state
+            .outputs
+            .into_iter()
+            .map(Vout::try_from)
+            .collect::<Result<HashSet<Vout>, _>>()?;
+
+        Ok(Transaction {
+            state: PartialOutputs {
+                inputs: self.state.inputs,
+                outputs,
+                global: self.state.global,
+            },
+        })
+    }
+}
+
+/// Intermediate state: inputs are ordered and all outputs have known value and script_pubkey,
+/// but outputs have not yet been ordered.
+#[derive(Default, Debug)]
+pub struct PartialOutputs {
+    pub inputs: Vec<Vin>,
+    pub outputs: HashSet<Vout>,
+    pub global: Global,
+}
+
+impl TypeState for PartialOutputs {}
+
+impl Join for PartialOutputs {
+    fn join(&self, other: &Self) -> Result<Self, JoinError> {
+        Ok(Self {
+            inputs: self.inputs.clone(),
+            outputs: self.outputs.join(&other.outputs)?,
+            global: self.global.join(&other.global)?,
+        })
+    }
+}
+
+impl Transaction<PartialOutputs> {
+    // TODO: should return a Result
     pub fn apply_ordering_with_salt(self, salt: &[u8; 32]) -> Transaction<OrderedOutputs> {
-        let mut outputs: Vec<_> = self.state.outputs.iter().cloned().collect();
+        let mut outputs: Vec<_> = self.state.outputs.into_iter().collect();
         outputs.sort_by_key(|output| {
             let mut buf = Vec::new();
             let txout = bitcoin::TxOut {
-                value: output.value.unwrap(),
-                script_pubkey: output.script_pubkey.clone().unwrap(),
+                value: output.value,
+                script_pubkey: output.script_pubkey.clone(),
             };
             txout.consensus_encode(&mut buf).unwrap();
             let mut hash = Sha256::engine();
@@ -238,9 +323,9 @@ impl Transaction<OrderedInputs> {
 
         Transaction {
             state: OrderedOutputs {
-                inputs: self.state.inputs.clone(),
+                inputs: self.state.inputs,
                 outputs,
-                global: self.state.global.clone(),
+                global: self.state.global,
             },
         }
     }
@@ -286,23 +371,10 @@ pub struct WithGlobal {
 
 impl TypeState for WithGlobal {}
 
-#[derive(Debug, thiserror::Error)]
-pub enum PsbtConversionError {
-    #[error("Missing outpoint txid for index {0}")]
-    MissingOutpointTxid(usize),
-    #[error("Missing outpoint vout for index {0}")]
-    MissingOutpointVout(usize),
-    #[error("Missing value for output {0}")]
-    MissingValue(usize),
-    #[error("Missing script pubkey for output {0}")]
-    MissingScriptPubkey(usize),
-}
-
-impl TryFrom<Transaction<WithGlobal>> for Psbt {
-    type Error = PsbtConversionError;
-    fn try_from(psbt: Transaction<WithGlobal>) -> Result<Self, Self::Error> {
+impl From<Transaction<WithGlobal>> for Psbt {
+    fn from(psbt: Transaction<WithGlobal>) -> Self {
         let psbt = psbt.state;
-        let tx = psbt_v2::v2::Psbt {
+        psbt_v2::v2::Psbt {
             global: psbt_v2::v2::Global {
                 version: psbt_v2::Version::TWO,
                 // TODO: is this the right default?
@@ -321,66 +393,58 @@ impl TryFrom<Transaction<WithGlobal>> for Psbt {
             inputs: psbt
                 .inputs
                 .into_iter()
-                .enumerate()
-                .map(|(i, input)| {
-                    Ok::<psbt_v2::v2::Input, PsbtConversionError>(psbt_v2::v2::Input {
-                        previous_txid: input
-                            .previous_output
-                            .ok_or(PsbtConversionError::MissingOutpointTxid(i))?,
-                        spent_output_index: input
-                            .spent_output_index
-                            .ok_or(PsbtConversionError::MissingOutpointVout(i))?,
-                        sequence: input.sequence,
-                        witness_utxo: input.witness_utxo,
-                        final_script_sig: input.final_script_sig,
-                        final_script_witness: input.final_script_witness,
-                        min_time: None,
-                        min_height: None,
-                        non_witness_utxo: None,
-                        partial_sigs: BTreeMap::new(),
-                        sighash_type: None,
-                        redeem_script: None,
-                        witness_script: None,
-                        bip32_derivations: BTreeMap::new(),
-                        ripemd160_preimages: BTreeMap::new(),
-                        sha256_preimages: BTreeMap::new(),
-                        hash160_preimages: BTreeMap::new(),
-                        hash256_preimages: BTreeMap::new(),
-                        tap_key_sig: None,
-                        tap_script_sigs: BTreeMap::new(),
-                        tap_scripts: BTreeMap::new(),
-                        tap_key_origins: BTreeMap::new(),
-                        tap_internal_key: None,
-                        tap_merkle_root: None,
-                        proprietaries: BTreeMap::new(),
-                        unknowns: BTreeMap::new(),
-                    })
+                .map(|input| {
+                    let data = input.data;
+                    psbt_v2::v2::Input {
+                        previous_txid: input.previous_output,
+                        spent_output_index: input.spent_output_index,
+                        sequence: data.sequence,
+                        witness_utxo: data.witness_utxo,
+                        final_script_sig: data.final_script_sig,
+                        final_script_witness: data.final_script_witness,
+                        min_time: data.min_time,
+                        min_height: data.min_height,
+                        non_witness_utxo: data.non_witness_utxo,
+                        partial_sigs: data.partial_sigs,
+                        sighash_type: data.sighash_type,
+                        redeem_script: data.redeem_script,
+                        witness_script: data.witness_script,
+                        bip32_derivations: data.bip32_derivations,
+                        ripemd160_preimages: data.ripemd160_preimages,
+                        sha256_preimages: data.sha256_preimages,
+                        hash160_preimages: data.hash160_preimages,
+                        hash256_preimages: data.hash256_preimages,
+                        tap_key_sig: data.tap_key_sig,
+                        tap_script_sigs: data.tap_script_sigs,
+                        tap_scripts: data.tap_scripts,
+                        tap_key_origins: data.tap_key_origins,
+                        tap_internal_key: data.tap_internal_key,
+                        tap_merkle_root: data.tap_merkle_root,
+                        proprietaries: data.proprietaries,
+                        unknowns: data.unknowns,
+                    }
                 })
-                .collect::<Result<Vec<_>, PsbtConversionError>>()?,
+                .collect(),
             outputs: psbt
                 .outputs
                 .into_iter()
-                .enumerate()
-                .map(|(i, output)| {
-                    Ok::<psbt_v2::v2::Output, PsbtConversionError>(psbt_v2::v2::Output {
-                        amount: output.value.ok_or(PsbtConversionError::MissingValue(i))?,
-                        script_pubkey: output
-                            .script_pubkey
-                            .ok_or(PsbtConversionError::MissingScriptPubkey(i))?,
-                        redeem_script: output.redeem_script,
-                        witness_script: output.witness_script,
-                        bip32_derivations: output.bip32_derivations,
-                        tap_internal_key: output.tap_internal_key,
-                        tap_tree: output.tap_tree,
-                        tap_key_origins: output.tap_key_origins,
-                        proprietaries: output.proprietaries,
-                        unknowns: output.unknowns,
-                    })
+                .map(|output| {
+                    let data = output.data;
+                    psbt_v2::v2::Output {
+                        amount: output.value,
+                        script_pubkey: output.script_pubkey,
+                        redeem_script: data.redeem_script,
+                        witness_script: data.witness_script,
+                        bip32_derivations: data.bip32_derivations,
+                        tap_internal_key: data.tap_internal_key,
+                        tap_tree: data.tap_tree,
+                        tap_key_origins: data.tap_key_origins,
+                        proprietaries: data.proprietaries,
+                        unknowns: data.unknowns,
+                    }
                 })
-                .collect::<Result<Vec<_>, PsbtConversionError>>()?,
-        };
-
-        Ok(tx)
+                .collect(),
+        }
     }
 }
 
@@ -392,17 +456,19 @@ mod tests {
     fn full_flow() {
         let mut tx = Transaction::<UnOrderedInputs>::new();
         let my_vin = Vin::from_input(&bitcoin::transaction::TxIn::default());
-        tx.state.inputs.insert(my_vin.clone());
+        tx.state.inputs.insert(PartialVin::from(my_vin.clone()));
 
-        let mut tx = tx.apply_ordering_with_salt(&[0; 32]);
+        let mut tx = tx.try_resolve_outpoints().unwrap();
         let my_vout = Vout::from_output(&bitcoin::TxOut {
             value: bitcoin::Amount::from_sat(1000),
             script_pubkey: bitcoin::ScriptBuf::new(),
         });
-        tx.state.outputs.insert(my_vout.clone());
+        tx.state.outputs.insert(PartialVout::from(my_vout.clone()));
+        let tx = tx.apply_ordering_with_salt(&[0; 32]);
+        let tx = tx.try_resolve_outputs().unwrap();
         let tx = tx.apply_ordering_with_salt(&[0; 32]);
         let tx = tx.finalize();
-        let psbt = Psbt::try_from(tx).unwrap();
+        let psbt = Psbt::from(tx);
         assert_eq!(psbt.global.tx_version, bitcoin::transaction::Version::TWO);
         assert_eq!(psbt.global.input_count, 1);
         assert_eq!(psbt.global.output_count, 1);
@@ -413,14 +479,8 @@ mod tests {
         assert_eq!(psbt.global.tx_modifiable_flags, 0);
         assert_eq!(psbt.global.version, psbt_v2::Version::TWO);
 
-        assert_eq!(
-            psbt.inputs[0].previous_txid,
-            my_vin.previous_output.unwrap()
-        );
-        assert_eq!(
-            psbt.inputs[0].spent_output_index,
-            my_vin.spent_output_index.unwrap()
-        );
+        assert_eq!(psbt.inputs[0].previous_txid, my_vin.previous_output);
+        assert_eq!(psbt.inputs[0].spent_output_index, my_vin.spent_output_index);
 
         assert_eq!(psbt.inputs[0].final_script_sig, None);
         assert_eq!(psbt.inputs[0].final_script_witness, None);
@@ -444,11 +504,8 @@ mod tests {
         assert_eq!(psbt.inputs[0].proprietaries, BTreeMap::new());
         assert_eq!(psbt.inputs[0].unknowns, BTreeMap::new());
 
-        assert_eq!(psbt.outputs[0].amount, my_vout.value.unwrap());
-        assert_eq!(
-            psbt.outputs[0].script_pubkey,
-            my_vout.script_pubkey.unwrap()
-        );
+        assert_eq!(psbt.outputs[0].amount, my_vout.value);
+        assert_eq!(psbt.outputs[0].script_pubkey, my_vout.script_pubkey);
         assert_eq!(psbt.outputs[0].redeem_script, None);
         assert_eq!(psbt.outputs[0].witness_script, None);
         assert_eq!(psbt.outputs[0].bip32_derivations, BTreeMap::new());
@@ -464,19 +521,19 @@ mod tests {
         let output_amount = bitcoin::Amount::from_sat(1000);
         let output_script_pubkey = bitcoin::ScriptBuf::new();
 
-        let p1 = Vout {
+        let p1 = PartialVout {
             value: Some(output_amount),
             ..Default::default()
         };
-        let p1_again = Vout {
+        let p1_again = PartialVout {
             value: Some(output_amount),
             ..Default::default()
         };
-        // Attempting to join p1 and p1_again NOT fail and result in a Vout with value 1000
+        // Joining two PartialVouts with the same value should succeed
         let p1_joined = p1.join(&p1_again).unwrap();
         assert_eq!(p1_joined.value, Some(output_amount));
 
-        let p1_with_different_value = Vout {
+        let p1_with_different_value = PartialVout {
             value: Some(bitcoin::Amount::from_sat(2000)),
             ..Default::default()
         };
@@ -486,15 +543,14 @@ mod tests {
             Some(JoinError::ScalarDisagree)
         );
 
-        let p1_with_different_script_pubkey = Vout {
+        let p1_with_script_pubkey = PartialVout {
             script_pubkey: Some(bitcoin::ScriptBuf::new()),
             ..Default::default()
         };
 
-        let p1_joined_with_different_script_pubkey =
-            p1.join(&p1_with_different_script_pubkey).unwrap();
+        let p1_joined_with_script_pubkey = p1.join(&p1_with_script_pubkey).unwrap();
         assert_eq!(
-            p1_joined_with_different_script_pubkey.script_pubkey,
+            p1_joined_with_script_pubkey.script_pubkey,
             Some(output_script_pubkey)
         );
         assert_eq!(p1_joined.value, Some(output_amount));
