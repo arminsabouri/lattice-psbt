@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
-use psbt_v2::{PsbtSighashType, raw};
+use psbt_v2::{raw, PsbtSighashType};
 
-use crate::{Join, JoinError};
+use crate::{JoinError, PartialJoin};
 
 /// All PSBT input fields except the outpoint (previous_output, spent_output_index).
 #[derive(Default, Clone, PartialEq, Eq, Hash, Debug)]
@@ -77,7 +77,7 @@ pub struct VinData {
     pub unknowns: BTreeMap<raw::Key, Vec<u8>>,
 }
 
-impl Join for VinData {
+impl PartialJoin for VinData {
     fn join(&self, other: &Self) -> Result<Self, JoinError> {
         Ok(Self {
             sequence: self.sequence.join(&other.sequence)?,
@@ -133,7 +133,7 @@ impl std::ops::DerefMut for PartialVin {
     }
 }
 
-impl Join for PartialVin {
+impl PartialJoin for PartialVin {
     fn join(&self, other: &Self) -> Result<Self, JoinError> {
         Ok(Self {
             previous_output: self.previous_output.join(&other.previous_output)?,
@@ -176,7 +176,7 @@ impl Vin {
     }
 }
 
-impl Join for Vin {
+impl PartialJoin for Vin {
     fn join(&self, other: &Self) -> Result<Self, JoinError> {
         if self.previous_output != other.previous_output
             || self.spent_output_index != other.spent_output_index

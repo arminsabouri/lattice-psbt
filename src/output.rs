@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
-use crate::{Join, JoinError};
+use crate::{JoinError, PartialJoin};
 use bitcoin::{
-    ScriptBuf, TapLeafHash, XOnlyPublicKey, bip32::KeySource, secp256k1, taproot::TapTree,
+    bip32::KeySource, secp256k1, taproot::TapTree, ScriptBuf, TapLeafHash, XOnlyPublicKey,
 };
 use psbt_v2::raw;
 
@@ -27,7 +27,7 @@ pub struct VoutData {
     pub unknowns: BTreeMap<raw::Key, Vec<u8>>,
 }
 
-impl Join for VoutData {
+impl PartialJoin for VoutData {
     fn join(&self, other: &Self) -> Result<Self, JoinError> {
         Ok(Self {
             redeem_script: self.redeem_script.join(&other.redeem_script)?,
@@ -63,7 +63,7 @@ impl std::ops::DerefMut for PartialVout {
     }
 }
 
-impl Join for PartialVout {
+impl PartialJoin for PartialVout {
     fn join(&self, other: &Self) -> Result<Self, JoinError> {
         Ok(Self {
             value: self.value.join(&other.value)?,
@@ -114,7 +114,7 @@ impl Vout {
     }
 }
 
-impl Join for Vout {
+impl PartialJoin for Vout {
     fn join(&self, other: &Self) -> Result<Self, JoinError> {
         if self.value != other.value || self.script_pubkey != other.script_pubkey {
             return Err(JoinError::ScalarDisagree);

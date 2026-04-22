@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use bitcoin::bip32::KeySource;
 use psbt_v2::raw;
 
-use crate::{Join, JoinError};
+use crate::{JoinError, PartialJoin};
 
 /// Global PSBT field
 #[derive(Default, Debug, Clone)]
@@ -15,7 +15,7 @@ pub struct Global {
     pub unknowns: BTreeMap<raw::Key, Vec<u8>>,
 }
 
-impl Join for Global {
+impl PartialJoin for Global {
     fn join(&self, other: &Self) -> Result<Self, JoinError> {
         Ok(Self {
             tx_version: self.tx_version.join(&other.tx_version)?,

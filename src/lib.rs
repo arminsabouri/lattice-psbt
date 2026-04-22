@@ -1,8 +1,8 @@
 use bitcoin::{
-    TapLeafHash, XOnlyPublicKey,
     bip32::KeySource,
     consensus::Encodable,
-    hashes::{Hash, HashEngine, sha256::Hash as Sha256},
+    hashes::{sha256::Hash as Sha256, Hash, HashEngine},
+    TapLeafHash, XOnlyPublicKey,
 };
 use psbt_v2::{raw, v2::Psbt};
 use std::{
@@ -35,7 +35,7 @@ Perhaps the best way to do this is to define a Optional field generic over a typ
 
 macro_rules! impl_join_field_value {
     ($t:ty) => {
-        impl Join for Option<$t> {
+        impl PartialJoin for Option<$t> {
             fn join(&self, other: &Self) -> Result<Self, JoinError> {
                 match (self, other) {
                     (None, None) => Ok(None),
@@ -72,7 +72,7 @@ impl_join_field_value!(bitcoin::TapNodeHash);
 // TODO: remove clones
 macro_rules! impl_join_for_hashset {
     ($type:ty) => {
-        impl Join for HashSet<$type> {
+        impl PartialJoin for HashSet<$type> {
             fn join(&self, other: &Self) -> Result<Self, JoinError> {
                 let mut result = self.clone();
                 result.extend(other.iter().cloned());
@@ -89,7 +89,7 @@ impl_join_for_hashset!(Vout);
 
 macro_rules! impl_join_for_btreemap {
     ($key:ty, $value:ty) => {
-        impl Join for BTreeMap<$key, $value> {
+        impl PartialJoin for BTreeMap<$key, $value> {
             fn join(&self, other: &Self) -> Result<Self, JoinError> {
                 let mut result = self.clone();
                 result.extend(other.clone().into_iter());
@@ -165,7 +165,7 @@ pub enum JoinError {
 }
 
 /// Trait for PSBT fragments that can be joined.
-pub trait Join {
+pub trait PartialJoin {
     fn join(&self, other: &Self) -> Result<Self, JoinError>
     where
         Self: Sized;
@@ -202,7 +202,7 @@ pub struct UnOrderedInputs {
 
 impl TypeState for UnOrderedInputs {}
 
-impl Join for UnOrderedInputs {
+impl PartialJoin for UnOrderedInputs {
     fn join(&self, other: &Self) -> Result<Self, JoinError> {
         Ok(Self {
             inputs: self.inputs.join(&other.inputs)?,
@@ -244,7 +244,7 @@ pub struct PartialInputs {
 
 impl TypeState for PartialInputs {}
 
-impl Join for PartialInputs {
+impl PartialJoin for PartialInputs {
     fn join(&self, other: &Self) -> Result<Self, JoinError> {
         Ok(Self {
             inputs: self.inputs.join(&other.inputs)?,
@@ -319,7 +319,7 @@ pub struct OrderedInputs {
 
 impl TypeState for OrderedInputs {}
 
-impl Join for OrderedInputs {
+impl PartialJoin for OrderedInputs {
     fn join(&self, other: &Self) -> Result<Self, JoinError> {
         reject_new_inputs(&self.inputs, &other.inputs)?;
         Ok(Self {
@@ -363,7 +363,7 @@ pub struct PartialOutputs {
 
 impl TypeState for PartialOutputs {}
 
-impl Join for PartialOutputs {
+impl PartialJoin for PartialOutputs {
     fn join(&self, other: &Self) -> Result<Self, JoinError> {
         reject_new_inputs(&self.inputs, &other.inputs)?;
         Ok(Self {
@@ -440,7 +440,7 @@ pub struct OrderedOutputs {
 
 impl TypeState for OrderedOutputs {}
 
-impl Join for OrderedOutputs {
+impl PartialJoin for OrderedOutputs {
     fn join(&self, other: &Self) -> Result<Self, JoinError> {
         reject_new_inputs(&self.inputs, &other.inputs)?;
         reject_new_outputs(&self.outputs, &other.outputs)?;
