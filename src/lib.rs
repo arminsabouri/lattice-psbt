@@ -33,15 +33,24 @@ We need to define a each transaction component as either a scalar value that can
 Perhaps the best way to do this is to define a Optional field generic over a type (which can be a scalar or a semilattice). And to define a trait for how to compare and join them.
 */
 
+impl<T> PartialJoin for Option<T> where T: PartialJoin + Clone {
+    fn join(&self, other: &Self) -> Result<Self, JoinError> {
+        Ok(match (self, other) {
+            (None, None) => None,
+            (None, x) | (x, None) => x.clone(),
+            (Some(a), Some(b)) => Some(a.join(b)?),
+        })
+    }
+}
+
 macro_rules! impl_join_field_value {
     ($t:ty) => {
-        impl PartialJoin for Option<$t> {
+        impl PartialJoin for $t {
             fn join(&self, other: &Self) -> Result<Self, JoinError> {
-                match (self, other) {
-                    (None, None) => Ok(None),
-                    (None, x) | (x, None) => Ok(x.clone()),
-                    (Some(a), Some(b)) if a == b => Ok(Some(a.clone())),
-                    _ => Err(JoinError::ScalarDisagree),
+                if self == other {
+                    Ok(self.clone())
+                } else {
+                    Err(JoinError::ScalarDisagree)
                 }
             }
         }
