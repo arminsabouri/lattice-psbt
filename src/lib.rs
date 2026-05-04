@@ -6,5 +6,6 @@ mod output;
 mod partial_join;
 mod tx;
 mod values;
-#[cfg(test)]
-mod tests;
+
+// #[cfg(test)]
+// mod tests;

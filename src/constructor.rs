@@ -37,7 +37,18 @@ impl<M: Mod, O: Unord> Constructor<M, O> {
     }
 
     fn fix_output_order(&mut self) {
-        todo!("set unordered inputs = false")
+        todo!("set unordered outputs = false")
     }
+
+    fn fix_order(&mut self) {
+        todo!("set unordered = false")
+    }
+
+    // /// Extract PSBT that can be transferred to construct another constructor with it and resume
     // fn psbt()
+
+    // /// Mark non-modifiable, fix ordering, and switch out of constructor role to updater role
+    // fn updater(self) ->
 }
+
+impl Constructor<Modifiable, Unordered> {}

@@ -7,6 +7,7 @@ impl PartialJoin for Global {
     type Error = ValueError;
 
     fn join(&self, other: &Self) -> Result<Self, Self::Error> {
+        // Self<Result<T>>
         // TODO input_count and output_count -> 0 if disagree? or must agree?
         Ok(Self {
             version: self.version.join(&other.version)?,

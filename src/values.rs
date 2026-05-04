@@ -1,15 +1,18 @@
 use crate::partial_join::PartialJoin;
 
-// just replace with struct Conflict?
+// TODO just replace with struct Conflict()?
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ValueError {
-    #[error("conflict")]
-    Conflict, // TODO Conflict(&T, &T) ?
+    #[error("Values differ")]
+    Conflict, // TODO is Conflict(&T, &T) possible/reasonable? needs to borrow, should be ok if the both PSBTs are borrowed w/ same lifetime as error. or Box<dyn> by cloning?
 }
+
+/// A marker trait for value types that should have a trivial join based on equality
+trait IdempotentValue: PartialEq {}
 
 impl<T> PartialJoin for T
 where
-    T: Idempotent + Clone,
+    T: IdempotentValue + Clone,
 {
     type Error = ValueError;
 
@@ -23,32 +26,34 @@ where
     }
 }
 
-/// A marker trait for value types that should have a trivial join based on equality
-trait Idempotent: PartialEq {}
+// struct IdempotentValueLattice<T : Clone + PartialEq>(T) + impl<T> PartialJoin for IdempotentValue<T>?
+// or just blanket impl for PartialEq + Clone?
+//
+// QuotientLattice -> pick arbitrarily? not partial
 
-impl Idempotent for u32 {}
-impl Idempotent for u8 {}
-impl Idempotent for usize {}
-// impl Idempotent for Vec<u8> {}
-// impl Idempotent for Vec<bitcoin::TapLeafHash> {}
-impl Idempotent for bitcoin::Txid {}
-impl Idempotent for bitcoin::ScriptBuf {}
-impl Idempotent for bitcoin::Witness {}
-impl Idempotent for bitcoin::TxOut {}
-impl Idempotent for bitcoin::Amount {}
-impl Idempotent for bitcoin::Sequence {}
-impl Idempotent for bitcoin::locktime::absolute::LockTime {}
-impl Idempotent for bitcoin::transaction::Version {}
-impl Idempotent for bitcoin::secp256k1::XOnlyPublicKey {}
-impl Idempotent for bitcoin::taproot::TapTree {}
-impl Idempotent for bitcoin::taproot::LeafVersion {}
-impl Idempotent for bitcoin::TapLeafHash {}
-impl Idempotent for psbt_v2::Version {}
-impl Idempotent for bitcoin::absolute::Time {}
-impl Idempotent for bitcoin::absolute::Height {}
-impl Idempotent for bitcoin::Transaction {}
-impl Idempotent for psbt_v2::PsbtSighashType {}
-impl Idempotent for bitcoin::taproot::Signature {}
-impl Idempotent for bitcoin::ecdsa::Signature {}
-impl Idempotent for bitcoin::TapNodeHash {}
-impl Idempotent for bitcoin::bip32::KeySource {}
+impl IdempotentValue for u32 {}
+impl IdempotentValue for u8 {}
+impl IdempotentValue for usize {}
+
+impl IdempotentValue for bitcoin::absolute::Height {}
+impl IdempotentValue for bitcoin::absolute::Time {}
+impl IdempotentValue for bitcoin::Amount {}
+impl IdempotentValue for bitcoin::bip32::KeySource {}
+impl IdempotentValue for bitcoin::ecdsa::Signature {}
+impl IdempotentValue for bitcoin::locktime::absolute::LockTime {}
+impl IdempotentValue for bitcoin::ScriptBuf {}
+impl IdempotentValue for bitcoin::secp256k1::XOnlyPublicKey {}
+impl IdempotentValue for bitcoin::Sequence {}
+impl IdempotentValue for bitcoin::TapLeafHash {}
+impl IdempotentValue for bitcoin::TapNodeHash {}
+impl IdempotentValue for bitcoin::taproot::LeafVersion {}
+impl IdempotentValue for bitcoin::taproot::Signature {}
+impl IdempotentValue for bitcoin::taproot::TapTree {}
+impl IdempotentValue for bitcoin::Transaction {}
+impl IdempotentValue for bitcoin::transaction::Version {}
+impl IdempotentValue for bitcoin::Txid {}
+impl IdempotentValue for bitcoin::TxOut {}
+impl IdempotentValue for bitcoin::Witness {}
+
+impl IdempotentValue for psbt_v2::PsbtSighashType {}
+impl IdempotentValue for psbt_v2::Version {}

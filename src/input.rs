@@ -89,32 +89,3 @@ impl PartialJoin for Input {
         })
     }
 }
-
-// TODO impl Ord with sort key, based on proprietary field
-
-#[derive(Debug, Clone)]
-pub struct InputByOutpoint(Input);
-
-impl Deref for InputByOutpoint {
-    type Target = Input;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl Hash for InputByOutpoint {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.previous_txid.hash(state);
-        self.0.spent_output_index.hash(state);
-    }
-}
-
-impl PartialEq for InputByOutpoint {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.previous_txid == other.0.previous_txid
-            && self.0.spent_output_index == other.0.spent_output_index
-    }
-}
-
-impl Eq for InputByOutpoint {}

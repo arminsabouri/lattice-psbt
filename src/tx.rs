@@ -15,10 +15,6 @@ pub struct UnorderedPsbt {
     pub outputs: OutputSet,
 }
 
-// TODO
-// InputByOutpoint etc makes no sense when join()ing elements because .intersect or .union will arbitrarily pick one
-// needs to be reimpl as struct InputSet(HashMap<())
-
 impl PartialJoin for UnorderedPsbt {
     type Error = ValueError;
 
@@ -26,9 +22,9 @@ impl PartialJoin for UnorderedPsbt {
         let inputs = self.inputs.join(&other.inputs)?;
         let outputs = self.outputs.join(&other.outputs)?;
 
-        let mut global = self.global.join(&other.global)?;
+        let mut global_posssibly_with_some_conflicts = self.global.join(&other.global)?;
         global.input_count = inputs.len();
-        global.output_count = inputs.len();
+        global.output_count = outputs.len();
 
         Ok(Self {
             global,

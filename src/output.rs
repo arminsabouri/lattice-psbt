@@ -48,7 +48,7 @@ impl PartialJoin for Output {
     fn join(&self, other: &Self) -> Result<Self, Self::Error> {
         Ok(Self {
             amount: self.amount.join(&other.amount)?,
-            script_pubkey: self.script_pubkey.join(&other.script_pubkey)?,
+            script_pubkey: self.script_pubkey.join(&other.script_pubkey)?, // FIXME allow empty to non-empty to behave like Option<ScriptBuf> instead of ScriptBuf under equality
             redeem_script: self.redeem_script.join(&other.redeem_script)?,
             witness_script: self.witness_script.join(&other.witness_script)?,
             tap_internal_key: self.tap_internal_key.join(&other.tap_internal_key)?,
