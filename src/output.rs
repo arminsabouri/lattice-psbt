@@ -10,6 +10,12 @@ use crate::values::ValueError;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutputSet(HashMap<ScriptBuf, Output>); // FIXME Vec<u8> not ScriptBuf
 
+impl Default for OutputSet {
+    fn default() -> Self {
+        OutputSet(HashMap::new())
+    }
+}
+
 impl OutputSet {
     pub fn len(&self) -> usize {
         self.0.len()
