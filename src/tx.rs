@@ -22,7 +22,7 @@ impl PartialJoin for UnorderedPsbt {
         let inputs = self.inputs.join(&other.inputs)?;
         let outputs = self.outputs.join(&other.outputs)?;
 
-        let mut global_posssibly_with_some_conflicts = self.global.join(&other.global)?;
+        let mut global = self.global.join(&other.global)?;
         global.input_count = inputs.len();
         global.output_count = outputs.len();
 

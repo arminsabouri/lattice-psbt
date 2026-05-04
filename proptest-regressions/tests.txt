@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 4edc335b2a947e201ecbcdb63c1ede303593c6d0b1f86e4616add92e33f7aa76 # shrinks to a = UnorderedPsbt { global: Global { version: Version(2), tx_version: Version(2), fallback_lock_time: None, tx_modifiable_flags: 0, input_count: 0, output_count: 0, xpubs: {}, proprietaries: {}, unknowns: {} }, inputs: InputSet({OutPoint { txid: 0000000000000000000000000000000000000000000000000000000000000000, vout: 0 }: Input { previous_txid: 0000000000000000000000000000000000000000000000000000000000000000, spent_output_index: 0, sequence: None, min_time: None, min_height: None, non_witness_utxo: None, witness_utxo: None, partial_sigs: {}, sighash_type: None, redeem_script: None, witness_script: None, bip32_derivations: {}, final_script_sig: None, final_script_witness: None, ripemd160_preimages: {}, sha256_preimages: {}, hash160_preimages: {}, hash256_preimages: {}, tap_key_sig: None, tap_script_sigs: {}, tap_scripts: {}, tap_key_origins: {}, tap_internal_key: None, tap_merkle_root: None, proprietaries: {}, unknowns: {} }}), outputs: OutputSet({}) }
