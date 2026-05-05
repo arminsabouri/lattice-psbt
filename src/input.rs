@@ -1,6 +1,6 @@
 use bitcoin::OutPoint;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
@@ -93,5 +93,28 @@ impl PartialJoin for Input {
             proprietaries: self.proprietaries.join(&other.proprietaries)?,
             unknowns: self.unknowns.join(&other.unknowns)?,
         })
+    }
+}
+
+impl PartialJoin for (Vec<bitcoin::TapLeafHash>, bitcoin::bip32::KeySource) {
+    type Error = ValueError;
+
+    fn join(&self, other: &Self) -> Result<Self, Self::Error> {
+        if self.1 != other.1 {
+            return Err(ValueError::Conflict);
+        }
+
+        // leaf hashes for the same x-only key are merged as a set across partial views.
+        let mut leaves: BTreeSet<bitcoin::TapLeafHash> = self.0.iter().copied().collect();
+        leaves.extend(other.0.iter().copied());
+        Ok((leaves.into_iter().collect(), self.1.clone()))
+    }
+}
+
+impl PartialJoin for (bitcoin::ScriptBuf, bitcoin::taproot::LeafVersion) {
+    type Error = ValueError;
+
+    fn join(&self, other: &Self) -> Result<Self, Self::Error> {
+        Ok((self.0.join(&other.0)?, self.1.join(&other.1)?))
     }
 }

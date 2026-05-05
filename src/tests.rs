@@ -115,3 +115,38 @@ fn psbt_global_count_recomputed() {
     assert_eq!(joined.global.input_count, 1);
     assert_eq!(joined.global.output_count, 0);
 }
+
+// tap_key_origins maps each xpub to (Vec<TapLeafHash>, KeySource).
+// BIP 371 says leaf hashes for the same xpub should be unioned across signers.
+// Two signers that each control a different script path under the same internal key
+// should join even though both views are valid.
+#[test]
+fn tap_key_origins_leaf_hashes_should_union() {
+    let sk = SecretKey::from_slice(&[1u8; 32]).unwrap();
+    let xpub = Keypair::from_secret_key(&Secp256k1::signing_only(), &sk)
+        .x_only_public_key()
+        .0;
+    let outpoint = OutPoint::new(Txid::from_byte_array([0u8; 32]), 0);
+    let key_source = (Fingerprint::from([0u8; 4]), DerivationPath::default());
+
+    let leaf_a = TapLeafHash::from_byte_array([1u8; 32]);
+    let leaf_b = TapLeafHash::from_byte_array([2u8; 32]);
+
+    let mut input_a = Input::new(&outpoint);
+    input_a
+        .tap_key_origins
+        .insert(xpub, (vec![leaf_a], key_source.clone()));
+
+    let mut input_b = Input::new(&outpoint);
+    input_b
+        .tap_key_origins
+        .insert(xpub, (vec![leaf_b], key_source.clone()));
+
+    let result = input_a.join(&input_b);
+    assert!(
+        result.is_ok(),
+        "joining inputs with same xpub but disjoint leaf hashes should succeed per BIP 371; got: {result:?}"
+    );
+    let (leaves, _) = result.unwrap().tap_key_origins.get(&xpub).unwrap().clone();
+    assert!(leaves.contains(&leaf_a) && leaves.contains(&leaf_b));
+}

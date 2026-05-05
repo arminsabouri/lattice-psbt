@@ -18,17 +18,6 @@ where
     }
 }
 
-impl<A, B> PartialJoin for (A, B)
-where
-    A: PartialJoin + Clone,
-    B: PartialJoin<Error = A::Error> + Clone,
-{
-    type Error = A::Error;
-    fn join(&self, other: &Self) -> Result<Self, Self::Error> {
-        Ok((self.0.join(&other.0)?, self.1.join(&other.1)?))
-    }
-}
-
 impl<K, V> PartialJoin for BTreeMap<K, V>
 where
     K: Ord + Clone,
